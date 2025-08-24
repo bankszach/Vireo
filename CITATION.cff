@@ -1,0 +1,40 @@
+cff-version: 1.2.0
+title: "Vireo: Interactive Ecosystem Sandbox"
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: "You"
+    given-names: "Your Name"
+    email: "you@example.com"
+    orcid: "https://orcid.org/0000-0000-0000-0000"
+repository-code: "https://github.com/yourusername/vireo"
+abstract: "An interactive ecosystem simulation built on a custom GPU engine, featuring diffusion fields, emergent behavior, and massive-scale particle systems. Built with Rust and WGPU for high-performance simulation."
+keywords:
+  - "ecosystem simulation"
+  - "GPU computing"
+  - "emergent behavior"
+  - "particle systems"
+  - "diffusion fields"
+  - "Rust"
+  - "WGPU"
+license: "MIT"
+version: "0.1.0"
+date-released: "2024-12-19"
+preferred-citation:
+  type: "software"
+  title: "Vireo: Interactive Ecosystem Sandbox"
+  authors:
+    - family-names: "You"
+      given-names: "Your Name"
+  year: 2024
+  url: "https://github.com/yourusername/vireo"
+  version: "0.1.0"
+references:
+  - type: "video"
+    title: "Mote: An Interactive Ecosystem Simulation"
+    authors:
+      - family-names: "Whidden"
+        given-names: "Peter"
+    year: 2024
+    url: "https://www.youtube.com/watch?v=Hju0H3NHxVI"
+    publisher: "Recurse Center"
+    note: "This project draws conceptual inspiration from Peter Whidden's talk on Mote. All code and assets are original implementations."
