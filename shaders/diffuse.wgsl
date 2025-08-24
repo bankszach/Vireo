@@ -6,12 +6,17 @@ struct SimParams {
   _pad0: f32,
   grid_w: u32,
   grid_h: u32,
-  group_size: u32,
+  _reserved: u32,  // Was group_size, now reserved for future use
   paused: u32,
   time: f32,
   diffusion: f32,
   decay: f32,
   _pad1: f32,
+  // Camera parameters
+  camera_pos_x: f32,
+  camera_pos_y: f32,
+  camera_zoom: f32,
+  _pad2: f32,
 };
 
 @group(0) @binding(0) var srcTex: texture_2d<f32>;

@@ -5,12 +5,17 @@ struct SimParams {
   _pad0: f32,
   grid_w: u32,
   grid_h: u32,
-  group_size: u32,
+  _reserved: u32,  // Was group_size, now reserved for future use
   paused: u32,
   time: f32,
   diffusion: f32,
   decay: f32,
   _pad1: f32,
+  // Camera parameters
+  camera_pos_x: f32,
+  camera_pos_y: f32,
+  camera_zoom: f32,
+  _pad2: f32,
 };
 
 struct Particle {
@@ -188,12 +193,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
   }
   
-  // Clear and set state flags
-  p.state_flags = 0u;
+  // Set state flags (don't clear reproduction flag that was set above)
+  var flags = 0u;
   
   let local_food = sample_field01(p.pos);
   if (local_food > 0.5) {
-    p.state_flags |= 2u;  // Feeding flag
+    flags |= 2u;  // Feeding flag
   }
   
   // Set herding flag for herbivores
@@ -207,7 +212,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
       }
     }
     if (nearby_herbivores > 3u) {
-      p.state_flags |= 8u;  // Herding flag
+      flags |= 8u;  // Herding flag
     }
   }
   
@@ -225,7 +230,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
       }
     }
     if (closest_prey_dist < 40.0) {
-      p.state_flags |= 4u;  // Attack flag
+      flags |= 4u;  // Attack flag
     }
   }
   
@@ -276,6 +281,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   // Integrate movement
   p.vel = (p.vel + force * params.dt) * 0.95;  // Slightly more damping
   p.pos += p.vel * params.dt;
+  
+  // Set final state flags (preserving reproduction flag)
+  p.state_flags = flags;
 
   // BOUNDARY HANDLING: Bounce instead of wrap to prevent edge clustering
   let bounce_damping = 0.7;

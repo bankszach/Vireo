@@ -6,19 +6,27 @@ An interactive ecosystem simulation built on a custom GPU engine, featuring diff
 
 ## About
 
-Vireo is a GPU-native ecosystem sandbox that explores emergent behavior through simple rules and massive scale. The simulation features a 2D diffusion field, particles with ring-spring constraints, and a behavior kernel that creates complex interactions from simple components.
+Vireo is a GPU-native ecosystem sandbox that explores emergent behavior through simple rules and massive scale. The simulation features a 2D diffusion field, independent agent particles, and a behavior kernel that creates complex interactions from simple components.
 
 This project re-implements concepts from scratch and is **not affiliated** with Mote or its author. We're grateful for the inspiration and the community enthusiasm around large-scale emergent simulations.
+
+### What Changed in 0.1.x
+
+- **Boundary behavior**: Changed from wrapping to bouncing edges for more natural movement
+- **Visual effects**: Reduced intensity of feed/glow/stress effects for cleaner appearance
+- **Seeding logic**: Less clumpy distribution with broader, more natural food sources
+- **State flags**: Added visual indicators for reproduction, feeding, attacking, and herding states
+- **Architecture**: Removed ring-spring system in favor of independent agent behaviors
 
 ## Features
 
 - **GPU diffusion field** (RGBA16F texture) with ping-pong rendering
 - **Massive particle systems** (20k by default, scalable to 50k+ on stronger GPUs)
-- **Ring-spring physics** for particle grouping and stability
+- **Agent-based behaviors** with independent particle decision-making
 - **Emergent behaviors** through simple rule sets:
-  - Plants: stationary, stabilized by springs
-  - Herbivores: follow food gradients
-  - Predators: hunt herbivores
+  - Plants: stationary, energy-based growth
+  - Herbivores: follow food gradients, herd together
+  - Predators: hunt herbivores, territorial behavior
 - **Real-time rendering** with instanced quads (no CPU copies)
 - **Clean architecture** with separate compute and render pipelines
 
@@ -29,10 +37,16 @@ This project re-implements concepts from scratch and is **not affiliated** with 
 cargo run --release
 ```
 
-### Controls
+### Demo Controls
 - `Space` — pause/resume simulation
 - `R` — re-seed the environment
+- `C` — reset camera to center view
 - `Esc` — quit
+
+### Camera Controls
+- **Mouse Wheel** — zoom in/out
+- **Left Click + Drag** — pan around the world
+- **C key** — reset camera to center view
 
 ### Environment Variables
 ```bash
@@ -56,6 +70,7 @@ shaders/render.wgsl       # Instanced quad renderer
 
 - **Compute passes**: One for diffusion, one for particles per frame
 - **Memory layout**: Optimized for GPU with minimal CPU-GPU transfers
+- **Field format**: RGBA16F texture with filterable sampling for smooth gradients
 - **Scalability**: Designed to handle 50k+ particles on consumer GPUs
 - **Extensibility**: Clean separation of concerns for easy modification
 

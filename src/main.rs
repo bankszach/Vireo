@@ -1,18 +1,17 @@
-
-use std::time::Instant;
 use std::cmp::min;
 use std::f32;
 use std::sync::Arc;
+use std::time::Instant;
 
 use bytemuck::{Pod, Zeroable};
-use glam::{Vec2, vec2};
+use glam::{vec2, Vec2};
 use rand::Rng;
 use wgpu::util::DeviceExt;
 use winit::{
     dpi::PhysicalSize,
-    event::{Event, WindowEvent, ElementState, KeyEvent},
+    event::{ElementState, Event, KeyEvent, WindowEvent, MouseButton, MouseScrollDelta},
+    event_loop::EventLoop,
     keyboard::Key,
-    event_loop::{EventLoop},
     window::WindowBuilder,
 };
 
@@ -21,10 +20,58 @@ use winit::{
 const DEFAULT_GRID_W: u32 = 1024;
 const DEFAULT_GRID_H: u32 = 576;
 const DEFAULT_PARTICLES: u32 = 20_000; // try 50_000 on stronger GPUs
-const GROUP_SIZE: u32 = 12;            // particles per ring-spring group
+                                       // Removed: was used for ring-spring groups, now unused
 const WORKGROUP_2D: (u32, u32) = (16, 16);
 const WORKGROUP_1D: u32 = 256;
 
+// ------------------------ Camera ------------------------
+
+#[derive(Clone, Copy, Debug)]
+struct Camera {
+    pos: Vec2,      // Camera center in world coordinates
+    zoom: f32,      // Zoom level (1.0 = normal, >1.0 = zoomed in, <1.0 = zoomed out)
+    min_zoom: f32,  // Minimum zoom level
+    max_zoom: f32,  // Maximum zoom level
+}
+
+impl Camera {
+    fn new(world_w: f32, world_h: f32) -> Self {
+        Self {
+            pos: vec2(world_w * 0.5, world_h * 0.5), // Start centered
+            zoom: 1.0,
+            min_zoom: 0.1,  // Can zoom out to see 10x more area
+            max_zoom: 5.0,   // Can zoom in to see 5x closer
+        }
+    }
+    
+    fn zoom_in(&mut self, factor: f32) {
+        self.zoom = (self.zoom * factor).min(self.max_zoom);
+    }
+    
+    fn zoom_out(&mut self, factor: f32) {
+        self.zoom = (self.zoom / factor).max(self.min_zoom);
+    }
+    
+    fn pan(&mut self, delta: Vec2) {
+        // Pan speed depends on zoom level - more zoom = slower pan
+        let pan_speed = 1.0 / self.zoom;
+        self.pos += delta * pan_speed;
+    }
+    
+    fn world_to_screen(&self, world_pos: Vec2, screen_size: Vec2) -> Vec2 {
+        let screen_center = screen_size * 0.5;
+        let world_offset = world_pos - self.pos;
+        let scaled_offset = world_offset * self.zoom;
+        screen_center + scaled_offset
+    }
+    
+    fn screen_to_world(&self, screen_pos: Vec2, screen_size: Vec2) -> Vec2 {
+        let screen_center = screen_size * 0.5;
+        let screen_offset = screen_pos - screen_center;
+        let world_offset = screen_offset / self.zoom;
+        self.pos + world_offset
+    }
+}
 
 // ------------------------ GPU Data ------------------------
 
@@ -37,12 +84,17 @@ struct SimParams {
     _pad0: f32,
     grid_w: u32,
     grid_h: u32,
-    group_size: u32,
+    _reserved: u32, // Was group_size, now reserved for future use
     paused: u32,
     time: f32,
     diffusion: f32,
     decay: f32,
     _pad1: f32,
+    // Camera parameters
+    camera_pos_x: f32,
+    camera_pos_y: f32,
+    camera_zoom: f32,
+    _pad2: f32,
 }
 
 #[repr(C)]
@@ -52,10 +104,10 @@ struct Particle {
     pos: [f32; 2],
     vel: [f32; 2],
     energy: f32,
-    kind: u32,   // 0 = plant, 1 = herbivore, 2 = predator
-    age: f32,    // Age in seconds
+    kind: u32,                  // 0 = plant, 1 = herbivore, 2 = predator
+    age: f32,                   // Age in seconds
     reproduction_cooldown: f32, // Time until can reproduce again
-    state_flags: u32,  // Visual state indicators
+    state_flags: u32,           // Visual state indicators
 }
 
 impl Particle {
@@ -94,6 +146,9 @@ struct Gfx {
     config: wgpu::SurfaceConfiguration,
     size: PhysicalSize<u32>,
 
+    // Camera
+    camera: Camera,
+
     // Field ping-pong
     field_a: wgpu::Texture,
     field_b: wgpu::Texture,
@@ -123,28 +178,43 @@ struct Gfx {
 }
 
 impl Gfx {
-    async fn new(window: Arc<winit::window::Window>, grid_w: u32, grid_h: u32, particle_count: u32) -> Self {
+    async fn new(
+        window: Arc<winit::window::Window>,
+        grid_w: u32,
+        grid_h: u32,
+        particle_count: u32,
+    ) -> Self {
         let size = window.inner_size();
         let instance = wgpu::Instance::default();
         let surface = instance.create_surface(window.clone()).expect("surface");
-        let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-        }).await.expect("No adapter");
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            })
+            .await
+            .expect("No adapter");
 
-        let (device, queue) = adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                label: None,
-            },
-            None
-        ).await.expect("device");
+        let (device, queue) = adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::default(),
+                    label: None,
+                },
+                None,
+            )
+            .await
+            .expect("device");
 
         let surface_caps = surface.get_capabilities(&adapter);
-        let surface_format = surface_caps.formats.iter().copied()
-            .find(|f| f.is_srgb()).unwrap_or(surface_caps.formats[0]);
+        let surface_format = surface_caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(surface_caps.formats[0]);
 
         // Create sampler for texture sampling
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -159,14 +229,16 @@ impl Gfx {
         });
 
         // Prefer Fifo present mode for better compatibility, fall back to first available
-        let present_mode = surface_caps.present_modes.iter()
+        let present_mode = surface_caps
+            .present_modes
+            .iter()
             .find(|&&mode| mode == wgpu::PresentMode::Fifo)
             .copied()
             .unwrap_or(surface_caps.present_modes[0]);
-            
+
         println!("Selected present mode: {:?}", present_mode);
         println!("Available present modes: {:?}", surface_caps.present_modes);
-            
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
@@ -185,7 +257,11 @@ impl Gfx {
             | wgpu::TextureUsages::STORAGE_BINDING
             | wgpu::TextureUsages::COPY_DST
             | wgpu::TextureUsages::COPY_SRC;
-        let extent = wgpu::Extent3d { width: grid_w, height: grid_h, depth_or_array_layers: 1 };
+        let extent = wgpu::Extent3d {
+            width: grid_w,
+            height: grid_h,
+            depth_or_array_layers: 1,
+        };
         let field_a = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("field_a"),
             size: extent,
@@ -230,23 +306,22 @@ impl Gfx {
             array_layer_count: Some(1),
         });
 
-        
         // --- Particles buffer ---
         let mut rng = rand::thread_rng();
         let world_w = grid_w as f32;
         let world_h = grid_h as f32;
         let mut particles = Vec::with_capacity(particle_count as usize);
-        
+
         // Debug counters for particle types
         let mut plant_count = 0;
         let mut herbivore_count = 0;
         let mut predator_count = 0;
-        
+
         // Calculate target counts for each type
-        let target_plants = particle_count / 15;  // ~6.7%
-        let target_predators = particle_count / 15;  // ~6.7%
-        let target_herbivores = particle_count - target_plants - target_predators;  // ~86.6%
-        
+        let target_plants = particle_count / 15; // ~6.7%
+        let target_predators = particle_count / 15; // ~6.7%
+        let target_herbivores = particle_count - target_plants - target_predators; // ~86.6%
+
         // Spawn plants first - distribute them more evenly
         for _ in 0..target_plants {
             let x = rng.gen_range(50.0..(world_w - 50.0));
@@ -255,7 +330,7 @@ impl Gfx {
             particles.push(particle);
             plant_count += 1;
         }
-        
+
         // Spawn herbivores - some clustering but not too much
         for i in 0..target_herbivores {
             let x = if i < target_herbivores / 2 {
@@ -273,7 +348,7 @@ impl Gfx {
             particles.push(particle);
             herbivore_count += 1;
         }
-        
+
         // Spawn predators - more spread out to avoid clustering
         for _ in 0..target_predators {
             let x = rng.gen_range(150.0..(world_w - 150.0));
@@ -285,12 +360,24 @@ impl Gfx {
             particles.push(particle);
             predator_count += 1;
         }
-        
+
         // Debug output for particle distribution
         println!("Particle distribution:");
-        println!("  Plants (Green): {} ({:.1}%)", plant_count, (plant_count as f32 / particle_count as f32) * 100.0);
-        println!("  Herbivores (Blue): {} ({:.1}%)", herbivore_count, (herbivore_count as f32 / particle_count as f32) * 100.0);
-        println!("  Predators (Red): {} ({:.1}%)", predator_count, (predator_count as f32 / particle_count as f32) * 100.0);
+        println!(
+            "  Plants (Green): {} ({:.1}%)",
+            plant_count,
+            (plant_count as f32 / particle_count as f32) * 100.0
+        );
+        println!(
+            "  Herbivores (Blue): {} ({:.1}%)",
+            herbivore_count,
+            (herbivore_count as f32 / particle_count as f32) * 100.0
+        );
+        println!(
+            "  Predators (Red): {} ({:.1}%)",
+            predator_count,
+            (predator_count as f32 / particle_count as f32) * 100.0
+        );
         println!("  Total particles: {}", particle_count);
 
         let particle_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -299,17 +386,28 @@ impl Gfx {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
+        // --- Camera ---
+        let camera = Camera::new(world_w, world_h);
+        
         // --- Params ---
         let params = SimParams {
-            dt: 1.0/60.0,
-            world_w, world_h, _pad0: 0.0,
-            grid_w, grid_h,
-            group_size: GROUP_SIZE,
+            dt: 1.0 / 60.0,
+            world_w,
+            world_h,
+            _pad0: 0.0,
+            grid_w,
+            grid_h,
+            _reserved: 0, // Was group_size, now reserved for future use
             paused: 0,
             time: 0.0,
-            diffusion: 0.03,  // Further reduced from 0.08
-            decay: 0.002,      // Further increased from 0.001
+            diffusion: 0.03, // Further reduced from 0.08
+            decay: 0.002,    // Further increased from 0.001
             _pad1: 0.0,
+            // Camera parameters
+            camera_pos_x: camera.pos.x,
+            camera_pos_y: camera.pos.y,
+            camera_zoom: camera.zoom,
+            _pad2: 0.0,
         };
         let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("params"),
@@ -325,26 +423,40 @@ impl Gfx {
         let render_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &pipelines.render_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Buffer(params_buf.as_entire_buffer_binding()) },
-                wgpu::BindGroupEntry { binding: 1, resource: particle_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(params_buf.as_entire_buffer_binding()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: particle_buf.as_entire_binding(),
+                },
             ],
             label: Some("render_bg"),
         });
-        
+
         // Debug: Verify particle buffer binding
         println!("Particle buffer created with {} bytes", particle_buf.size());
         println!("First few particles for verification:");
         for i in 0..min(5, particles.len()) {
             let p = &particles[i];
-            println!("  Particle {}: pos=({:.1}, {:.1}), kind={}, energy={:.1}", 
-                    i, p.pos[0], p.pos[1], p.kind, p.energy);
+            println!(
+                "  Particle {}: pos=({:.1}, {:.1}), kind={}, energy={:.1}",
+                i, p.pos[0], p.pos[1], p.kind, p.energy
+            );
         }
-        
+
         let render_bg_clone = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &pipelines.render_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Buffer(params_buf.as_entire_buffer_binding()) },
-                wgpu::BindGroupEntry { binding: 1, resource: particle_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(params_buf.as_entire_buffer_binding()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: particle_buf.as_entire_binding(),
+                },
             ],
             label: Some("render_bg_clone"),
         });
@@ -353,9 +465,18 @@ impl Gfx {
         let diffuse_bg_a2b = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &pipelines.diffuse_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&field_a_view_sample) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&field_b_view_store) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Buffer(params_buf.as_entire_buffer_binding()) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&field_a_view_sample),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&field_b_view_store),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Buffer(params_buf.as_entire_buffer_binding()),
+                },
             ],
             label: Some("diffuse_bg_a2b"),
         });
@@ -363,9 +484,18 @@ impl Gfx {
         let diffuse_bg_b2a = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &pipelines.diffuse_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&field_b_view_sample) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&field_a_view_store) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Buffer(params_buf.as_entire_buffer_binding()) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&field_b_view_sample),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&field_a_view_store),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Buffer(params_buf.as_entire_buffer_binding()),
+                },
             ],
             label: Some("diffuse_bg_b2a"),
         });
@@ -374,10 +504,22 @@ impl Gfx {
         let particle_bg_read_a = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &pipelines.particle_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: particle_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&field_a_view_sample) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Buffer(params_buf.as_entire_buffer_binding()) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: particle_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&field_a_view_sample),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Buffer(params_buf.as_entire_buffer_binding()),
+                },
             ],
             label: Some("particle_bg_read_a"),
         });
@@ -385,20 +527,41 @@ impl Gfx {
         let particle_bg_read_b = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &pipelines.particle_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: particle_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&field_b_view_sample) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Buffer(params_buf.as_entire_buffer_binding()) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: particle_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&field_b_view_sample),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Buffer(params_buf.as_entire_buffer_binding()),
+                },
             ],
             label: Some("particle_bg_read_b"),
         });
 
         let mut gfx = Self {
             window,
-            surface, adapter, device, queue, config, size,
-            field_a, field_b,
-            field_a_view_sample, field_a_view_store,
-            field_b_view_sample, field_b_view_store,
+            surface,
+            adapter,
+            device,
+            queue,
+            config,
+            size,
+            camera,
+            field_a,
+            field_b,
+            field_a_view_sample,
+            field_a_view_store,
+            field_b_view_sample,
+            field_b_view_store,
             particle_buf,
             particle_count,
             params,
@@ -421,27 +584,27 @@ impl Gfx {
         // seed channel 0 with gaussian blobs as "food/scent"
         let w = self.params.grid_w as usize;
         let h = self.params.grid_h as usize;
-        let mut data = vec![0f32; w*h*4];
+        let mut data = vec![0f32; w * h * 4];
         let mut rng = rand::thread_rng();
-        
+
         // Create more distributed food sources instead of heavy clustering
         let center_x = self.params.world_w * 0.5;
         let center_y = self.params.world_h * 0.5;
-        
+
         // Primary food source at center (reduced intensity)
-        let primary_amp = 0.8;  // Reduced from 1.2
-        let primary_sigma = 80.0;  // Increased from 60.0 for wider distribution
+        let primary_amp = 0.8; // Reduced from 1.2
+        let primary_sigma = 80.0; // Increased from 60.0 for wider distribution
         for y in 0..h {
             for x in 0..w {
                 let dx = x as f32 - center_x;
                 let dy = y as f32 - center_y;
-                let r2 = (dx*dx + dy*dy) / (2.0*primary_sigma*primary_sigma);
-                data[(y*w + x)*4 + 0] += primary_amp * (-r2).exp();
+                let r2 = (dx * dx + dy * dy) / (2.0 * primary_sigma * primary_sigma);
+                data[(y * w + x) * 4 + 0] += primary_amp * (-r2).exp();
             }
         }
-        
+
         // Create multiple food clusters across the world for better distribution
-        let num_clusters = 8;  // Reduced from 25 for better distribution
+        let num_clusters = 8; // Reduced from 25 for better distribution
         for i in 0..num_clusters {
             // Distribute clusters more evenly across the world
             let cluster_x = if i < 4 {
@@ -451,7 +614,7 @@ impl Gfx {
                 // Right half of world
                 rng.gen_range((self.params.world_w * 0.6)..(self.params.world_w - 100.0))
             };
-            
+
             let cluster_y = if i % 2 == 0 {
                 // Upper half
                 rng.gen_range(100.0..(self.params.world_h * 0.4))
@@ -459,71 +622,80 @@ impl Gfx {
                 // Lower half
                 rng.gen_range((self.params.world_h * 0.6)..(self.params.world_h - 100.0))
             };
-            
-            let amp = rng.gen_range(0.3..0.7);  // Reduced amplitude
-            let sigma = rng.gen_range(40.0..80.0);  // Varied sizes
-            
+
+            let amp = rng.gen_range(0.3..0.7); // Reduced amplitude
+            let sigma = rng.gen_range(40.0..80.0); // Varied sizes
+
             for y in 0..h {
                 for x in 0..w {
                     let dx = x as f32 - cluster_x;
                     let dy = y as f32 - cluster_y;
-                    let r2 = (dx*dx + dy*dy) / (2.0*sigma*sigma);
-                    data[(y*w + x)*4 + 0] += amp * (-r2).exp();
+                    let r2 = (dx * dx + dy * dy) / (2.0 * sigma * sigma);
+                    data[(y * w + x) * 4 + 0] += amp * (-r2).exp();
                 }
             }
         }
-        
+
         // Add some random scattered food sources for natural variation
         for _ in 0..15 {
             let cx = rng.gen_range(50.0..(self.params.world_w - 50.0));
             let cy = rng.gen_range(50.0..(self.params.world_h - 50.0));
             let amp = rng.gen_range(0.2..0.5);
             let sigma = rng.gen_range(20.0..50.0);
-            
+
             for y in 0..h {
                 for x in 0..w {
                     let dx = x as f32 - cx;
                     let dy = y as f32 - cy;
-                    let r2 = (dx*dx + dy*dy) / (2.0*sigma*sigma);
-                    data[(y*w + x)*4 + 0] += amp * (-r2).exp();
+                    let r2 = (dx * dx + dy * dy) / (2.0 * sigma * sigma);
+                    data[(y * w + x) * 4 + 0] += amp * (-r2).exp();
                 }
             }
         }
-        
+
         // Add a very gentle gradient from center to edges (reduced intensity)
         for y in 0..h {
             for x in 0..w {
                 let dx = x as f32 - center_x;
                 let dy = y as f32 - center_y;
-                let dist_to_center = (dx*dx + dy*dy).sqrt();
-                let max_dist = (center_x*center_x + center_y*center_y).sqrt();
+                let dist_to_center = (dx * dx + dy * dy).sqrt();
+                let max_dist = (center_x * center_x + center_y * center_y).sqrt();
                 let gradient_factor = 1.0 - (dist_to_center / max_dist);
-                data[(y*w + x)*4 + 0] += gradient_factor * 0.05; // Reduced from 0.1
+                data[(y * w + x) * 4 + 0] += gradient_factor * 0.05; // Reduced from 0.1
             }
         }
-        
+
         // Convert f32 data to half-precision floats for RGBA16F texture
         let mut half_data = Vec::with_capacity(w * h * 4);
         for &val in &data {
             half_data.push(half::f16::from_f32(val));
         }
-        
-        println!("Texture upload: {}x{} RGBA16F, {} bytes per row (f16)", w, h, w * 8);
-        
+
+        println!(
+            "Texture upload: {}x{} RGBA16F, {} bytes per row (f16)",
+            w,
+            h,
+            w * 8
+        );
+
         // write into A (source)
         let layout = wgpu::ImageDataLayout {
             offset: 0,
             bytes_per_row: Some((w * 8) as u32), // 4 channels × 2 bytes (f16)
             rows_per_image: Some(h as u32),
         };
-        let size = wgpu::Extent3d { width: self.params.grid_w, height: self.params.grid_h, depth_or_array_layers: 1 };
-        
+        let size = wgpu::Extent3d {
+            width: self.params.grid_w,
+            height: self.params.grid_h,
+            depth_or_array_layers: 1,
+        };
+
         // Convert half data to bytes manually since half::f16 doesn't implement Pod
         let mut bytes = Vec::with_capacity(w * h * 8);
         for &half_val in &half_data {
             bytes.extend_from_slice(&half_val.to_le_bytes());
         }
-        
+
         self.queue.write_texture(
             wgpu::ImageCopyTexture {
                 texture: &self.field_a,
@@ -533,7 +705,7 @@ impl Gfx {
             },
             &bytes,
             layout,
-            size
+            size,
         );
     }
 
@@ -551,16 +723,52 @@ impl Gfx {
             self.params.time += dt;
         }
         self.params.dt = dt;
-        self.queue.write_buffer(&self.params_buf, 0, bytemuck::bytes_of(&self.params));
-        
-
+        self.queue
+            .write_buffer(&self.params_buf, 0, bytemuck::bytes_of(&self.params));
     }
     
+    fn update_camera(&mut self) {
+        // Sync camera state to GPU params
+        self.params.camera_pos_x = self.camera.pos.x;
+        self.params.camera_pos_y = self.camera.pos.y;
+        self.params.camera_zoom = self.camera.zoom;
+        
+        // Update GPU buffer
+        self.queue
+            .write_buffer(&self.params_buf, 0, bytemuck::bytes_of(&self.params));
+    }
+    
+    fn zoom_camera(&mut self, factor: f32) {
+        if factor > 1.0 {
+            self.camera.zoom_in(factor);
+        } else {
+            self.camera.zoom_out(1.0 / factor);
+        }
+        self.update_camera();
+    }
+    
+    fn pan_camera(&mut self, delta: Vec2) {
+        self.camera.pan(delta);
+        self.update_camera();
+    }
+    
+    fn reset_camera(&mut self) {
+        self.camera.pos = vec2(self.params.world_w * 0.5, self.params.world_h * 0.5);
+        self.camera.zoom = 1.0;
+        self.update_camera();
+    }
+
     fn frame(&mut self) -> Result<(), wgpu::SurfaceError> {
         let frame = self.surface.get_current_texture()?;
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame encoder") });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("frame encoder"),
+            });
 
         // --- Diffuse pass (ping-pong) ---
         {
@@ -569,7 +777,7 @@ impl Gfx {
             } else {
                 (&self.pipelines.diffuse_pipeline, &self.diffuse_bg_b2a)
             };
-            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { 
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("diffuse pass"),
                 timestamp_writes: None,
             });
@@ -585,8 +793,12 @@ impl Gfx {
 
         // --- Particles pass (read the *current* source) ---
         {
-            let bg = if self.use_a_as_src { &self.particle_bg_read_a } else { &self.particle_bg_read_b };
-            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { 
+            let bg = if self.use_a_as_src {
+                &self.particle_bg_read_a
+            } else {
+                &self.particle_bg_read_b
+            };
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("particles pass"),
                 timestamp_writes: None,
             });
@@ -604,7 +816,12 @@ impl Gfx {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.02, g: 0.02, b: 0.03, a: 1.0 }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.02,
+                            g: 0.02,
+                            b: 0.03,
+                            a: 1.0,
+                        }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -823,7 +1040,10 @@ fn create_pipelines(device: &wgpu::Device, surface_format: wgpu::TextureFormat) 
 }
 
 fn env_u32(key: &str, default: u32) -> u32 {
-    std::env::var(key).ok().and_then(|s| s.parse::<u32>().ok()).unwrap_or(default)
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(default)
 }
 
 fn main() {
@@ -834,49 +1054,102 @@ fn main() {
     env_logger::init();
 
     let event_loop = EventLoop::new().unwrap();
-    let window = Arc::new(WindowBuilder::new()
-        .with_title("Vireo — Ecosystem Sandbox")
-        .with_inner_size(PhysicalSize::new(grid_w, grid_h))
-        .build(&event_loop).unwrap());
+    let window = Arc::new(
+        WindowBuilder::new()
+            .with_title("Vireo — Ecosystem Sandbox")
+            .with_inner_size(PhysicalSize::new(grid_w, grid_h))
+            .build(&event_loop)
+            .unwrap(),
+    );
 
     let mut state = pollster::block_on(Gfx::new(window.clone(), grid_w, grid_h, particle_count));
 
     let mut last = Instant::now();
-    event_loop.run(move |event, elwt| {
-        match event {
-            Event::WindowEvent { event, .. } => match event {
-                WindowEvent::CloseRequested => elwt.exit(),
-                WindowEvent::Resized(sz) => state.resize(sz),
-                WindowEvent::KeyboardInput { event: KeyEvent { logical_key: code, state: ks, .. }, .. } => {
-                    if ks == ElementState::Pressed {
-                        match code {
-                            Key::Character(s) if s == "Escape" => elwt.exit(),
-                            Key::Character(s) if s == " " => { state.params.paused ^= 1; },
-                            Key::Character(s) if s == "r" || s == "R" => { state.seed_field(); },
-                            _ => {}
+    let mut mouse_pressed = false;
+    let mut last_mouse_pos = Vec2::ZERO;
+    
+    event_loop
+        .run(move |event, elwt| {
+            match event {
+                Event::WindowEvent { event, .. } => match event {
+                    WindowEvent::CloseRequested => elwt.exit(),
+                    WindowEvent::Resized(sz) => state.resize(sz),
+                    WindowEvent::KeyboardInput {
+                        event:
+                            KeyEvent {
+                                logical_key: code,
+                                state: ks,
+                                ..
+                            },
+                        ..
+                    } => {
+                        if ks == ElementState::Pressed {
+                            match code {
+                                Key::Character(s) if s == "Escape" => elwt.exit(),
+                                Key::Character(s) if s == " " => {
+                                    state.params.paused ^= 1;
+                                }
+                                Key::Character(s) if s == "r" || s == "R" => {
+                                    state.seed_field();
+                                }
+                                Key::Character(s) if s == "c" || s == "C" => {
+                                    state.reset_camera();
+                                }
+                                _ => {}
+                            }
                         }
                     }
-                }
-                WindowEvent::RedrawRequested => {
-                    match state.frame() {
+                    WindowEvent::RedrawRequested => match state.frame() {
                         Ok(()) => {}
                         Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
                         Err(wgpu::SurfaceError::OutOfMemory) => elwt.exit(),
                         Err(e) => eprintln!("Surface error: {e:?}"),
-                    }
+                    },
+                    WindowEvent::MouseInput { button, state: button_state, .. } => {
+                        match button {
+                            MouseButton::Left => {
+                                mouse_pressed = button_state == ElementState::Pressed;
+                            }
+                            _ => {}
+                        }
+                    },
+                    WindowEvent::MouseWheel { delta, .. } => {
+                        match delta {
+                            MouseScrollDelta::LineDelta(_, y) => {
+                                let zoom_factor = if y > 0.0 { 1.1 } else { 0.9 };
+                                state.zoom_camera(zoom_factor);
+                            }
+                            MouseScrollDelta::PixelDelta(pos) => {
+                                let zoom_factor = if pos.y > 0.0 { 1.05 } else { 0.95 };
+                                state.zoom_camera(zoom_factor);
+                            }
+                        }
+                    },
+                    WindowEvent::CursorMoved { position, .. } => {
+                        if mouse_pressed {
+                            let current_pos = vec2(position.x as f32, position.y as f32);
+                            if last_mouse_pos != Vec2::ZERO {
+                                let delta = current_pos - last_mouse_pos;
+                                state.pan_camera(delta);
+                            }
+                            last_mouse_pos = current_pos;
+                        } else {
+                            last_mouse_pos = Vec2::ZERO;
+                        }
+                    },
+                    _ => {}
+                },
+                Event::AboutToWait => {
+                    let now = Instant::now();
+                    let dt = (now - last).as_secs_f32().min(1.0 / 30.0);
+                    last = now;
+                    state.update_params(dt);
+                    // request redraw
+                    window.request_redraw();
                 }
-                _ => {}
-            },
-            Event::AboutToWait => {
-                let now = Instant::now();
-                let dt = (now - last).as_secs_f32().min(1.0/30.0);
-                last = now;
-                state.update_params(dt);
-                // request redraw
-                window.request_redraw();
-            }
 
-            _ => {}
-        }
-    }).unwrap();
+                _ => {}
+            }
+        })
+        .unwrap();
 }

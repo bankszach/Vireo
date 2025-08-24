@@ -2,9 +2,11 @@
 name = "vireo"
 version = "0.1.0"
 edition = "2021"
-authors = ["You <you@example.com>"]
+authors = ["Human <human@example.com>"]
 license = "MIT"
 description = "An interactive ecosystem sandbox built on a custom GPU engine with diffusion fields and emergent behavior simulation."
+repository = "https://github.com/human/Vireo"
+homepage = "https://github.com/human/Vireo"
 
 [dependencies]
 wgpu = "0.19"

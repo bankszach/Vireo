@@ -90,7 +90,7 @@
 
 ### 🌍 World Boundaries
 - **Size**: 1024x576 pixels (configurable via `VIREO_GRID_W` and `VIREO_GRID_H`)
-- **Wrapping**: Particles wrap around edges instead of bouncing
+- **Bouncing**: Particles bounce off edges instead of wrapping
 - **Edge Forces**: Smooth repulsion prevents particles from getting stuck
 
 ## Controls

@@ -5,12 +5,17 @@ struct SimParams {
   _pad0: f32,
   grid_w: u32,
   grid_h: u32,
-  group_size: u32,
+  _reserved: u32,  // Was group_size, now reserved for future use
   paused: u32,
   time: f32,
   diffusion: f32,
   decay: f32,
   _pad1: f32,
+  // Camera parameters
+  camera_pos_x: f32,
+  camera_pos_y: f32,
+  camera_zoom: f32,
+  _pad2: f32,
 };
 
 struct Particle {
@@ -32,8 +37,14 @@ struct VSOut {
 };
 
 fn ndc_from_world(p: vec2<f32>) -> vec2<f32> {
-  let x = (p.x / params.world_w) * 2.0 - 1.0;
-  let y = 1.0 - (p.y / params.world_h) * 2.0;
+  // Apply camera transform: translate, then scale
+  let camera_pos = vec2<f32>(params.camera_pos_x, params.camera_pos_y);
+  let world_offset = p - camera_pos;
+  let scaled_offset = world_offset * params.camera_zoom;
+  
+  // Convert to NDC coordinates
+  let x = (scaled_offset.x / params.world_w) * 2.0;
+  let y = -(scaled_offset.y / params.world_h) * 2.0;
   return vec2<f32>(x, y);
 }
 
