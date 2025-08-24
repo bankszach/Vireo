@@ -234,26 +234,48 @@ impl Gfx<'_> {
         let mut herbivore_count = 0;
         let mut predator_count = 0;
         
-        for i in 0..particle_count {
-            let x = rng.gen_range(0.0..world_w);
-            let y = rng.gen_range(0.0..world_h);
-            let kind = if i % 15 == 0 { 0 } else if i % 15 == 1 { 2 } else { 1 }; // 7% plants, 7% predators, 86% herbivores
-            
-            // Count particle types for debugging
-            match kind {
-                0 => plant_count += 1,
-                1 => herbivore_count += 1,
-                2 => predator_count += 1,
-                _ => {}
-            }
-            
-            let mut particle = Particle::new(vec2(x, y), kind);
-            // Start with very low initial velocities for calmer behavior
-            particle.vel = [0.0, 0.0];
-            // Initialize age and reproduction cooldown
+        // Calculate target counts for each type
+        let target_plants = particle_count / 15;  // ~6.7%
+        let target_predators = particle_count / 15;  // ~6.7%
+        let target_herbivores = particle_count - target_plants - target_predators;  // ~86.6%
+        
+        // Spawn plants first - distribute them more evenly
+        for i in 0..target_plants {
+            let x = rng.gen_range(50.0..(world_w - 50.0));
+            let y = rng.gen_range(50.0..(world_h - 50.0));
+            let particle = Particle::new(vec2(x, y), 0);
+            particles.push(particle);
+            plant_count += 1;
+        }
+        
+        // Spawn herbivores - some clustering but not too much
+        for i in 0..target_herbivores {
+            let x = if i < target_herbivores / 2 {
+                // First half: left side with some clustering
+                rng.gen_range(100.0..(world_w * 0.4))
+            } else {
+                // Second half: right side with some clustering
+                rng.gen_range((world_w * 0.6)..(world_w - 100.0))
+            };
+            let y = rng.gen_range(100.0..(world_h - 100.0));
+            let mut particle = Particle::new(vec2(x, y), 1);
+            particle.vel = [rng.gen_range(-0.5..0.5), rng.gen_range(-0.5..0.5)];
             particle.age = rng.gen_range(0.0..5.0);
             particle.reproduction_cooldown = rng.gen_range(0.0..10.0);
             particles.push(particle);
+            herbivore_count += 1;
+        }
+        
+        // Spawn predators - more spread out to avoid clustering
+        for i in 0..target_predators {
+            let x = rng.gen_range(150.0..(world_w - 150.0));
+            let y = rng.gen_range(150.0..(world_h - 150.0));
+            let mut particle = Particle::new(vec2(x, y), 2);
+            particle.vel = [rng.gen_range(-1.0..1.0), rng.gen_range(-1.0..1.0)];
+            particle.age = rng.gen_range(0.0..3.0);
+            particle.reproduction_cooldown = rng.gen_range(0.0..15.0);
+            particles.push(particle);
+            predator_count += 1;
         }
         
         // Debug output for particle distribution
@@ -393,14 +415,13 @@ impl Gfx<'_> {
         let mut data = vec![0f32; w*h*4];
         let mut rng = rand::thread_rng();
         
-        // Create food sources STRONGLY clustered in the center
+        // Create more distributed food sources instead of heavy clustering
         let center_x = self.params.world_w * 0.5;
         let center_y = self.params.world_h * 0.5;
-        let center_radius = 120.0;  // Smaller radius for tighter clustering
         
-        // Primary food source at exact center
-        let primary_amp = 1.2;  // Stronger primary source
-        let primary_sigma = 60.0;  // Concentrated primary source
+        // Primary food source at center (reduced intensity)
+        let primary_amp = 0.8;  // Reduced from 1.2
+        let primary_sigma = 80.0;  // Increased from 60.0 for wider distribution
         for y in 0..h {
             for x in 0..w {
                 let dx = x as f32 - center_x;
@@ -410,27 +431,46 @@ impl Gfx<'_> {
             }
         }
         
-        // Secondary food sources around center
-        for _ in 0..25 {  // Fewer but stronger sources
-            // 95% chance to spawn very near center, 5% chance to spawn slightly further
-            let (cx, cy) = if rng.gen::<f32>() < 0.95 {
-                // Spawn very near center
-                let angle: f32 = rng.gen_range(0.0..6.28);  // Random angle
-                let radius = rng.gen_range(0.0..center_radius);
-                (center_x + radius * angle.cos(), center_y + radius * angle.sin())
+        // Create multiple food clusters across the world for better distribution
+        let num_clusters = 8;  // Reduced from 25 for better distribution
+        for i in 0..num_clusters {
+            // Distribute clusters more evenly across the world
+            let cluster_x = if i < 4 {
+                // Left half of world
+                rng.gen_range(100.0..(self.params.world_w * 0.4))
             } else {
-                // Spawn in wider area but still not too far
-                let angle: f32 = rng.gen_range(0.0..6.28);
-                let radius = rng.gen_range(center_radius..200.0);
-                (center_x + radius * angle.cos(), center_y + radius * angle.sin())
+                // Right half of world
+                rng.gen_range((self.params.world_w * 0.6)..(self.params.world_w - 100.0))
             };
             
-            // Ensure food stays within bounds
-            let cx = cx.clamp(50.0, self.params.world_w - 50.0);
-            let cy = cy.clamp(50.0, self.params.world_h - 50.0);
+            let cluster_y = if i % 2 == 0 {
+                // Upper half
+                rng.gen_range(100.0..(self.params.world_h * 0.4))
+            } else {
+                // Lower half
+                rng.gen_range((self.params.world_h * 0.6)..(self.params.world_h - 100.0))
+            };
             
-            let amp = rng.gen_range(0.4..0.9);  // Stronger food sources
-            let sigma = rng.gen_range(25.0..60.0);  // Smaller, more concentrated food
+            let amp = rng.gen_range(0.3..0.7);  // Reduced amplitude
+            let sigma = rng.gen_range(40.0..80.0);  // Varied sizes
+            
+            for y in 0..h {
+                for x in 0..w {
+                    let dx = x as f32 - cluster_x;
+                    let dy = y as f32 - cluster_y;
+                    let r2 = (dx*dx + dy*dy) / (2.0*sigma*sigma);
+                    data[(y*w + x)*4 + 0] += amp * (-r2).exp();
+                }
+            }
+        }
+        
+        // Add some random scattered food sources for natural variation
+        for _ in 0..15 {
+            let cx = rng.gen_range(50.0..(self.params.world_w - 50.0));
+            let cy = rng.gen_range(50.0..(self.params.world_h - 50.0));
+            let amp = rng.gen_range(0.2..0.5);
+            let sigma = rng.gen_range(20.0..50.0);
+            
             for y in 0..h {
                 for x in 0..w {
                     let dx = x as f32 - cx;
@@ -441,7 +481,7 @@ impl Gfx<'_> {
             }
         }
         
-        // Add a gentle gradient from center to edges to guide particles
+        // Add a very gentle gradient from center to edges (reduced intensity)
         for y in 0..h {
             for x in 0..w {
                 let dx = x as f32 - center_x;
@@ -449,7 +489,7 @@ impl Gfx<'_> {
                 let dist_to_center = (dx*dx + dy*dy).sqrt();
                 let max_dist = (center_x*center_x + center_y*center_y).sqrt();
                 let gradient_factor = 1.0 - (dist_to_center / max_dist);
-                data[(y*w + x)*4 + 0] += gradient_factor * 0.1; // Gentle gradient
+                data[(y*w + x)*4 + 0] += gradient_factor * 0.05; // Reduced from 0.1
             }
         }
         

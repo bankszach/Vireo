@@ -75,7 +75,7 @@ fn vs_main(@builtin(instance_index) inst: u32,
   // Feeding indicator: bright yellow/orange glow
   if (is_feeding) {
     let feed_intensity = sin(params.time * 15.0) * 0.5 + 0.5;
-    final_color = mix(final_color, vec3<f32>(1.0, 0.8, 0.2), feed_intensity * 0.6);
+    final_color = mix(final_color, vec3<f32>(1.0, 0.8, 0.2), feed_intensity * 0.3);  // Reduced from 0.6
     alpha = 0.95;
   }
   
@@ -109,14 +109,14 @@ fn vs_main(@builtin(instance_index) inst: u32,
   if (P.energy > 8.0) {
     let glow_intensity = (P.energy - 8.0) / 2.0;
     let glow_color = vec3<f32>(1.0, 1.0, 0.8); // Soft yellow glow
-    final_color = mix(final_color, glow_color, glow_intensity * 0.4);
+    final_color = mix(final_color, glow_color, glow_intensity * 0.2);  // Reduced from 0.4
   }
   
   // Add stress indicator for low-energy particles
   if (P.energy < 3.0) {
     let stress_intensity = (3.0 - P.energy) / 3.0;
     let stress_color = vec3<f32>(1.0, 0.4, 0.4); // Red stress indicator
-    final_color = mix(final_color, stress_color, stress_intensity * 0.6);
+    final_color = mix(final_color, stress_color, stress_intensity * 0.3);  // Reduced from 0.6
     
     // Make stressed particles flicker
     let flicker = sin(params.time * 30.0 + f32(inst) * 0.1) * 0.5 + 0.5;
