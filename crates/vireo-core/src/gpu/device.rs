@@ -1,5 +1,5 @@
 use wgpu::{Adapter, Device, Instance, Queue, RequestAdapterOptions};
-use crate::sim::{RDParams, AgentParams};
+use crate::{RDParams, AgentParams};
 use crate::sim::Agent;
 use wgpu::util::DeviceExt;
 use bytemuck;

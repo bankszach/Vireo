@@ -1,172 +1,87 @@
-use wgpu::{Device, BindGroupLayout, ComputePipeline};
-use crate::shaders;
+use wgpu::{Device, ComputePipeline};
+use crate::gpu::layouts::Layouts;
 
 /// Compute pipelines for the simulation
 pub struct ComputePipelines {
     pub rd_pipeline: ComputePipeline,
-    pub rd_bgl: BindGroupLayout,
-    
     pub agent_pipeline: ComputePipeline,
-    pub agent_bgl: BindGroupLayout,
+    pub clear_occupancy_pipeline: ComputePipeline,
 }
 
 impl ComputePipelines {
-    /// Create all compute pipelines
-    pub fn new(device: &Device) -> Self {
-        let (rd_pipeline, rd_bgl) = Self::create_rd_pipeline(device);
-        let (agent_pipeline, agent_bgl) = Self::create_agent_pipeline(device);
+    /// Create all compute pipelines using centralized layouts
+    pub fn new(device: &Device, layouts: &Layouts) -> Self {
+        let rd_pipeline = Self::create_rd_pipeline(device, &layouts.rd);
+        let agent_pipeline = Self::create_agent_pipeline(device, &layouts.agent);
+        let clear_occupancy_pipeline = Self::create_clear_occupancy_pipeline(device, &layouts.clear_occupancy);
         
         Self {
             rd_pipeline,
-            rd_bgl,
             agent_pipeline,
-            agent_bgl,
+            clear_occupancy_pipeline,
         }
     }
     
     /// Create the reaction-diffusion compute pipeline
-    fn create_rd_pipeline(device: &Device) -> (ComputePipeline, BindGroupLayout) {
+    fn create_rd_pipeline(device: &Device, rd_layout: &wgpu::BindGroupLayout) -> ComputePipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("rd_shader"),
-            source: wgpu::ShaderSource::Wgsl(shaders::rd_step().into()),
-        });
-        
-        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("rd_bgl"),
-            entries: &[
-                // Source texture (R, W channels) - sampled for reading
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // Destination texture
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::Rgba16Float,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                // Parameters
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Herbivore density (occupancy)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
+            source: wgpu::ShaderSource::Wgsl(crate::shaders::rd_step().into()),
         });
         
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("rd_pl"),
-            bind_group_layouts: &[&bgl],
+            bind_group_layouts: &[rd_layout],
             push_constant_ranges: &[],
         });
         
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("rd_pipeline"),
             layout: Some(&pl),
             module: &shader,
             entry_point: "main",
-        });
-        
-        (pipeline, bgl)
+        })
     }
     
     /// Create the agent chemotaxis compute pipeline
-    fn create_agent_pipeline(device: &Device) -> (ComputePipeline, BindGroupLayout) {
+    fn create_agent_pipeline(device: &Device, agent_layout: &wgpu::BindGroupLayout) -> ComputePipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("agent_shader"),
-            source: wgpu::ShaderSource::Wgsl(shaders::agent_step().into()),
-        });
-        
-        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("agent_bgl"),
-            entries: &[
-                // Agents storage buffer
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Field texture (R, W channels)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // Parameters
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Herbivore occupancy (write)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
+            source: wgpu::ShaderSource::Wgsl(crate::shaders::agent_step().into()),
         });
         
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("agent_pl"),
-            bind_group_layouts: &[&bgl],
+            bind_group_layouts: &[agent_layout],
             push_constant_ranges: &[],
         });
         
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("agent_pipeline"),
             layout: Some(&pl),
             module: &shader,
             entry_point: "main",
+        })
+    }
+    
+    /// Create the clear occupancy compute pipeline
+    fn create_clear_occupancy_pipeline(device: &Device, clear_layout: &wgpu::BindGroupLayout) -> ComputePipeline {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("clear_occupancy_shader"),
+            source: wgpu::ShaderSource::Wgsl(crate::shaders::clear_occupancy().into()),
         });
         
-        (pipeline, bgl)
+        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("clear_occupancy_pl"),
+            bind_group_layouts: &[clear_layout],
+            push_constant_ranges: &[],
+        });
+        
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("clear_occupancy_pipeline"),
+            layout: Some(&pl),
+            module: &shader,
+            entry_point: "main",
+        })
     }
 }

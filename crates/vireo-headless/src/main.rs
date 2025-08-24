@@ -5,10 +5,11 @@ use clap::Parser;
 use clap::ValueEnum;
 use std::path::PathBuf;
 use std::time::Instant;
-use vireo_core::sim::SimulationConfig;
+use vireo_core::SimulationConfig;
 use vireo_core::gpu::GpuDevice;
 use vireo_core::gpu::{FieldTextures, ComputePipelines};
-use vireo_core::sim::{FieldManager, AgentManager, RDParams, AgentParams};
+use vireo_core::sim::{FieldManager, AgentManager};
+use vireo_core::{RDParams, AgentParams};
 use metrics::MetricsWriter;
 use snapshots::SnapshotWriter;
 

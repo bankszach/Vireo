@@ -1,8 +1,13 @@
-use serde::{Deserialize, Serialize};
+//! Shared parameter types for Vireo ecosystem simulation
+//! 
+//! This crate contains all parameter structures used by both headless and viewer simulations
+//! to ensure consistency and prevent parameter drift.
+
 use bytemuck::{Pod, Zeroable};
 
 /// World configuration parameters
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WorldConfig {
     pub size: [u32; 2],
     pub steps: u32,
@@ -11,7 +16,8 @@ pub struct WorldConfig {
 }
 
 /// Field reaction-diffusion parameters
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FieldConfig {
     pub D_R: f32,      // Resource diffusion coefficient
     pub D_W: f32,      // Waste diffusion coefficient
@@ -23,7 +29,8 @@ pub struct FieldConfig {
 }
 
 /// Chemotaxis parameters
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ChemotaxisConfig {
     pub chi_R: f32,    // Resource attraction strength
     pub chi_W: f32,    // Waste repulsion strength
@@ -35,26 +42,30 @@ pub struct ChemotaxisConfig {
 }
 
 /// Agent configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AgentConfig {
     pub herbivores: u32,
     pub E0: f32,       // Initial energy
 }
 
 /// Noise configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NoiseConfig {
     pub sigma: f32,    // Noise standard deviation
 }
 
 /// Obstacle configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ObstacleConfig {
     pub enabled: bool,
 }
 
 /// Complete simulation configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SimulationConfig {
     pub world: WorldConfig,
     pub field: FieldConfig,
@@ -150,7 +161,7 @@ impl From<&SimulationConfig> for RDParams {
             lambda_W: config.field.lambda_W,
             dt: config.world.dt,
             size: config.world.size,
-            H_SCALE: 0.125, // 1/8 per agent per cell as starting point
+            H_SCALE: bindings::H_SCALE, // Use constant from bindings module
             _pad: 0,
         }
     }
@@ -170,5 +181,62 @@ impl From<&SimulationConfig> for AgentParams {
             size: [config.world.size[0] as f32, config.world.size[1] as f32],
             _pad: [0.0, 0.0],
         }
+    }
+}
+
+/// WGSL binding layout documentation and validation
+/// 
+/// This module documents the exact binding layouts that must be identical
+/// between headless and viewer simulations to ensure parity.
+pub mod bindings {
+    use super::*;
+
+    /// Reaction-Diffusion compute shader bindings (group 0)
+    /// 
+    /// ```wgsl
+    /// @group(0) @binding(0) var srcTex: texture_2d<f32>;
+    /// @group(0) @binding(1) var dstTex: texture_storage_2d<rgba16float, write>;
+    /// @group(0) @binding(2) var<uniform> params: RDParams;
+    /// @group(0) @binding(3) var<storage, read> herbDensity: array<u32>;
+    /// ```
+    pub const RD_BINDINGS: &str = "RD Group 0: srcTex(sampler2D), dstTex(storage2D write), RDParams(uniform), OccBuf(storage r32uint)";
+    
+    /// Agent chemotaxis compute shader bindings (group 0)
+    /// 
+    /// ```wgsl
+    /// @group(0) @binding(0) var<storage, read_write> agents: array<Agent>;
+    /// @group(0) @binding(1) var fieldTex: texture_2d<f32>;
+    /// @group(0) @binding(2) var<uniform> params: AgentParams;
+    /// @group(0) @binding(3) var<storage, read_write> herbOcc: array<u32>;
+    /// ```
+    pub const AGENT_BINDINGS: &str = "Agents Group 0: Agents SSBO, FieldTex(sampler2D), AgentParams(uniform), OccBuf(storage r32uint)";
+    
+    /// H_SCALE constant value (must be identical in both simulations)
+    pub const H_SCALE: f32 = 0.125; // 1/8 per agent per cell
+
+    /// Validate that RDParams has the correct H_SCALE value
+    pub fn validate_rd_params(params: &RDParams) -> Result<(), String> {
+        if (params.H_SCALE - H_SCALE).abs() > f32::EPSILON {
+            Err(format!("H_SCALE mismatch: expected {}, got {}", H_SCALE, params.H_SCALE))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Validate that AgentParams has the correct size values
+    pub fn validate_agent_params(params: &AgentParams, expected_size: [u32; 2]) -> Result<(), String> {
+        let expected_size_f32 = [expected_size[0] as f32, expected_size[1] as f32];
+        if params.size != expected_size_f32 {
+            Err(format!("Size mismatch: expected {:?}, got {:?}", expected_size_f32, params.size))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Log binding layout information for debugging
+    pub fn log_binding_layouts() {
+        log::info!("RD Bindings: {}", RD_BINDINGS);
+        log::info!("Agent Bindings: {}", AGENT_BINDINGS);
+        log::info!("H_SCALE: {}", H_SCALE);
     }
 }

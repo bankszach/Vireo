@@ -10,3 +10,6 @@ pub mod shaders;
 pub use gpu::*;
 pub use sim::*;
 pub use shaders::*;
+
+// Re-export params from vireo-params
+pub use vireo_params::*;
