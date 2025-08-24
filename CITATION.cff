@@ -2,11 +2,10 @@ cff-version: 1.2.0
 title: "Vireo: Interactive Ecosystem Sandbox"
 message: "If you use this software, please cite it as below."
 authors:
-  - family-names: "You"
-    given-names: "Your Name"
-    email: "you@example.com"
-    orcid: "https://orcid.org/0000-0000-0000-0000"
-repository-code: "https://github.com/yourusername/vireo"
+  - family-names: "Banks"
+    given-names: "Zach"
+    email: "zach@bankszach.com"
+repository-code: "https://github.com/bankszach/vireo"
 abstract: "An interactive ecosystem simulation built on a custom GPU engine, featuring diffusion fields, emergent behavior, and massive-scale particle systems. Built with Rust and WGPU for high-performance simulation."
 keywords:
   - "ecosystem simulation"
@@ -23,10 +22,10 @@ preferred-citation:
   type: "software"
   title: "Vireo: Interactive Ecosystem Sandbox"
   authors:
-    - family-names: "You"
-      given-names: "Your Name"
+    - family-names: "Banks"
+      given-names: "Zach"
   year: 2024
-  url: "https://github.com/yourusername/vireo"
+  url: "https://github.com/bankszach/vireo"
   version: "0.1.0"
 references:
   - type: "video"

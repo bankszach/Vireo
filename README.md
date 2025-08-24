@@ -16,7 +16,7 @@ This project re-implements concepts from scratch and is **not affiliated** with 
 - **Visual effects**: Reduced intensity of feed/glow/stress effects for cleaner appearance
 - **Seeding logic**: Less clumpy distribution with broader, more natural food sources
 - **State flags**: Added visual indicators for reproduction, feeding, attacking, and herding states
-- **Architecture**: Removed ring-spring system in favor of independent agent behaviors
+- **Architecture**: Replaced ring-spring physics with independent agent behaviors for improved stability and clarity
 
 ## Features
 
@@ -24,23 +24,29 @@ This project re-implements concepts from scratch and is **not affiliated** with 
 - **Massive particle systems** (20k by default, scalable to 50k+ on stronger GPUs)
 - **Agent-based behaviors** with independent particle decision-making
 - **Emergent behaviors** through simple rule sets:
-  - Plants: stationary, energy-based growth
-  - Herbivores: follow food gradients, herd together
-  - Predators: hunt herbivores, territorial behavior
+  - Plants: stationary, energy-based growth in food-rich areas
+  - Herbivores: follow food gradients, herd together, avoid predators
+  - Predators: hunt herbivores, maintain territorial boundaries
 - **Real-time rendering** with instanced quads (no CPU copies)
+- **Emissions system** (toggle with E key) - particles leave trails that diffuse through the field
 - **Clean architecture** with separate compute and render pipelines
+- **WebGPU compatible** with automatic texture alignment for cross-platform support
 
 ## Build & Run
 
 ```bash
 # Requires Rust + cargo and a GPU that supports WebGPU (Vulkan/Metal/DX12)
 cargo run --release
+
+# For development/debugging (slower but more informative)
+cargo run
 ```
 
 ### Demo Controls
 - `Space` — pause/resume simulation
 - `R` — re-seed the environment
 - `C` — reset camera to center view
+- `E` — toggle emissions (particle trails)
 - `Esc` — quit
 
 ### Camera Controls
@@ -63,24 +69,26 @@ VIREO_GRID_W=1024 VIREO_GRID_H=576 cargo run --release
 src/main.rs               # WGPU initialization, pipelines, main loop
 shaders/diffuse.wgsl      # 2D field diffusion (laplacian + decay)
 shaders/particles.wgsl    # Particle physics + behavior kernel
+shaders/emissions.wgsl    # Particle-to-field emissions system
 shaders/render.wgsl       # Instanced quad renderer
 ```
 
 ## Technical Details
 
-- **Compute passes**: One for diffusion, one for particles per frame
+- **Compute passes**: Diffusion, particles, and optional emissions per frame
 - **Memory layout**: Optimized for GPU with minimal CPU-GPU transfers
 - **Field format**: RGBA16F texture with filterable sampling for smooth gradients
+- **Texture alignment**: Automatic 256-byte row padding for WebGPU compatibility
 - **Scalability**: Designed to handle 50k+ particles on consumer GPUs
 - **Extensibility**: Clean separation of concerns for easy modification
 
 ## Future Directions
 
-- **Emissions system**: Particles deposit signals back into the field
-- **Advanced physics**: Replace ring-springs with sparse neighbor systems
+- **Advanced physics**: Sparse neighbor systems for more realistic interactions
 - **Genetic algorithms**: Genome-based behavior evolution
 - **ML integration**: Python bindings for reinforcement learning
 - **Multi-agent systems**: Complex interaction networks
+- **Enhanced emissions**: More sophisticated particle-field interactions
 
 ## Inspiration & Attribution
 

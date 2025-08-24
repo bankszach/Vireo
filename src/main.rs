@@ -95,20 +95,29 @@ struct SimParams {
     camera_pos_y: f32,
     camera_zoom: f32,
     _pad2: f32,
+    // Emissions toggle
+    emissions_enabled: u32,
+    _pad3: f32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable, Debug, Default)]
 struct Particle {
-    // 32 bytes aligned
-    pos: [f32; 2],
-    vel: [f32; 2],
-    energy: f32,
-    kind: u32,                  // 0 = plant, 1 = herbivore, 2 = predator
-    age: f32,                   // Age in seconds
-    reproduction_cooldown: f32, // Time until can reproduce again
-    state_flags: u32,           // Visual state indicators
+    // 36 bytes total: vec2(8) + vec2(8) + f32(4) + u32(4) + f32(4) + f32(4) + u32(4)
+    pos: [f32; 2],             // 8 bytes
+    vel: [f32; 2],             // 8 bytes  
+    energy: f32,                // 4 bytes
+    kind: u32,                  // 4 bytes: 0 = plant, 1 = herbivore, 2 = predator
+    age: f32,                   // 4 bytes: Age in seconds
+    reproduction_cooldown: f32, // 4 bytes: Time until can reproduce again
+    state_flags: u32,           // 4 bytes: Visual state indicators
 }
+
+// Compile-time assertion to ensure Particle size matches WGSL struct
+// Note: vec2<f32> is 8 bytes, f32 is 4 bytes, u32 is 4 bytes
+// Total: 8 + 8 + 4 + 4 + 4 + 4 + 4 = 36 bytes
+const _: () = assert!(std::mem::size_of::<Particle>() == 36);
+const _: () = assert!(std::mem::align_of::<Particle>() == 4);
 
 impl Particle {
     fn new(pos: Vec2, kind: u32) -> Self {
@@ -132,6 +141,9 @@ struct Pipelines {
 
     particle_pipeline: wgpu::ComputePipeline,
     particle_bgl: wgpu::BindGroupLayout,
+
+    emissions_pipeline: wgpu::ComputePipeline,
+    emissions_bgl: wgpu::BindGroupLayout,
 
     render_pipeline: wgpu::RenderPipeline,
     render_bgl: wgpu::BindGroupLayout,
@@ -171,6 +183,8 @@ struct Gfx {
     diffuse_bg_b2a: wgpu::BindGroup,
     particle_bg_read_a: wgpu::BindGroup,
     particle_bg_read_b: wgpu::BindGroup,
+    emissions_bg_a: wgpu::BindGroup,
+    emissions_bg_b: wgpu::BindGroup,
     render_bg: wgpu::BindGroup,
 
     pipelines: Pipelines,
@@ -408,6 +422,9 @@ impl Gfx {
             camera_pos_y: camera.pos.y,
             camera_zoom: camera.zoom,
             _pad2: 0.0,
+            // Emissions toggle (disabled by default)
+            emissions_enabled: 0,
+            _pad3: 0.0,
         };
         let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("params"),
@@ -547,6 +564,44 @@ impl Gfx {
             label: Some("particle_bg_read_b"),
         });
 
+        // Emissions bind groups (particles write to field)
+        let emissions_bg_a = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &pipelines.emissions_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: particle_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&field_a_view_store),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Buffer(params_buf.as_entire_buffer_binding()),
+                },
+            ],
+            label: Some("emissions_bg_a"),
+        });
+        let emissions_bg_b = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &pipelines.emissions_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: particle_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&field_b_view_store),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Buffer(params_buf.as_entire_buffer_binding()),
+                },
+            ],
+            label: Some("emissions_bg_b"),
+        });
+
         let mut gfx = Self {
             window,
             surface,
@@ -571,12 +626,25 @@ impl Gfx {
             diffuse_bg_b2a,
             particle_bg_read_a,
             particle_bg_read_b,
+            emissions_bg_a,
+            emissions_bg_b,
             render_bg,
             pipelines,
             use_a_as_src: true,
         };
 
         gfx.seed_field();
+        
+        // Log available controls
+        println!("Controls:");
+        println!("  Space - Pause/Resume simulation");
+        println!("  R     - Re-seed environment");
+        println!("  C     - Reset camera to center");
+        println!("  E     - Toggle emissions (particle trails)");
+        println!("  Esc   - Quit");
+        println!("  Mouse wheel - Zoom in/out");
+        println!("  Left click + drag - Pan camera");
+        
         gfx
     }
 
@@ -671,17 +739,20 @@ impl Gfx {
             half_data.push(half::f16::from_f32(val));
         }
 
+        // Calculate padded bytes per row to meet WebGPU's 256-byte alignment requirement
+        let bytes_per_pixel = 8; // 4 channels × 2 bytes (f16)
+        let unpadded_bpr = w * bytes_per_pixel;
+        let padded_bpr = ((unpadded_bpr + 255) / 256) * 256; // Round up to 256-byte boundary
+        
         println!(
-            "Texture upload: {}x{} RGBA16F, {} bytes per row (f16)",
-            w,
-            h,
-            w * 8
+            "Texture upload: {}x{} RGBA16F, {} bytes per row (padded from {} for alignment)",
+            w, h, padded_bpr, unpadded_bpr
         );
 
         // write into A (source)
         let layout = wgpu::ImageDataLayout {
             offset: 0,
-            bytes_per_row: Some((w * 8) as u32), // 4 channels × 2 bytes (f16)
+            bytes_per_row: Some(padded_bpr as u32),
             rows_per_image: Some(h as u32),
         };
         let size = wgpu::Extent3d {
@@ -690,10 +761,21 @@ impl Gfx {
             depth_or_array_layers: 1,
         };
 
-        // Convert half data to bytes manually since half::f16 doesn't implement Pod
-        let mut bytes = Vec::with_capacity(w * h * 8);
-        for &half_val in &half_data {
-            bytes.extend_from_slice(&half_val.to_le_bytes());
+        // Create padded buffer for texture upload (each row padded to 256-byte boundary)
+        let mut padded_bytes = Vec::with_capacity(padded_bpr as usize * h);
+        for row in 0..h {
+            let row_start = row * w * 4; // 4 channels per pixel
+            let row_end = row_start + w * 4;
+            
+            // Add the actual pixel data for this row
+            for pixel_idx in row_start..row_end {
+                padded_bytes.extend_from_slice(&half_data[pixel_idx].to_le_bytes());
+            }
+            
+            // Pad the row to meet alignment requirement
+            let row_bytes = w * bytes_per_pixel;
+            let padding_needed = padded_bpr as usize - row_bytes;
+            padded_bytes.extend(std::iter::repeat(0u8).take(padding_needed));
         }
 
         self.queue.write_texture(
@@ -703,7 +785,7 @@ impl Gfx {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &bytes,
+            &padded_bytes,
             layout,
             size,
         );
@@ -803,6 +885,23 @@ impl Gfx {
                 timestamp_writes: None,
             });
             cpass.set_pipeline(&self.pipelines.particle_pipeline);
+            cpass.set_bind_group(0, bg, &[]);
+            let gx = (self.particle_count + WORKGROUP_1D - 1) / WORKGROUP_1D;
+            cpass.dispatch_workgroups(gx, 1, 1);
+        }
+
+        // --- Emissions pass (particles deposit into field) ---
+        if self.params.emissions_enabled == 1 {
+            let bg = if self.use_a_as_src {
+                &self.emissions_bg_a
+            } else {
+                &self.emissions_bg_b
+            };
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("emissions pass"),
+                timestamp_writes: None,
+            });
+            cpass.set_pipeline(&self.pipelines.emissions_pipeline);
             cpass.set_bind_group(0, bg, &[]);
             let gx = (self.particle_count + WORKGROUP_1D - 1) / WORKGROUP_1D;
             cpass.dispatch_workgroups(gx, 1, 1);
@@ -960,6 +1059,62 @@ fn create_pipelines(device: &wgpu::Device, surface_format: wgpu::TextureFormat) 
         entry_point: "main",
     });
 
+    // --- Emissions pipeline ---
+    let emissions_src = include_str!("../shaders/emissions.wgsl");
+    let emissions_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("emissions shader"),
+        source: wgpu::ShaderSource::Wgsl(emissions_src.into()),
+    });
+    let emissions_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("emissions bgl"),
+        entries: &[
+            // particles (read-only)
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // field texture (write-only for emissions)
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::WriteOnly,
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                },
+                count: None,
+            },
+            // params
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
+    });
+    let emissions_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("emissions pl"),
+        bind_group_layouts: &[&emissions_bgl],
+        push_constant_ranges: &[],
+    });
+    let emissions_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("emissions pipeline"),
+        layout: Some(&emissions_pl),
+        module: &emissions_mod,
+        entry_point: "main",
+    });
+
     // --- Render pipeline ---
     let render_src = include_str!("../shaders/render.wgsl");
     let render_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1034,6 +1189,8 @@ fn create_pipelines(device: &wgpu::Device, surface_format: wgpu::TextureFormat) 
         diffuse_bgl,
         particle_pipeline,
         particle_bgl,
+        emissions_pipeline,
+        emissions_bgl,
         render_pipeline,
         render_bgl,
     }
@@ -1088,12 +1245,32 @@ fn main() {
                                 Key::Character(s) if s == "Escape" => elwt.exit(),
                                 Key::Character(s) if s == " " => {
                                     state.params.paused ^= 1;
+                                    if state.params.paused == 1 {
+                                        println!("Simulation PAUSED");
+                                    } else {
+                                        println!("Simulation RESUMED");
+                                    }
                                 }
                                 Key::Character(s) if s == "r" || s == "R" => {
+                                    println!("Re-seeding environment...");
                                     state.seed_field();
+                                    println!("Environment re-seeded");
                                 }
                                 Key::Character(s) if s == "c" || s == "C" => {
+                                    println!("Resetting camera to center...");
                                     state.reset_camera();
+                                    println!("Camera reset");
+                                }
+                                Key::Character(s) if s == "e" || s == "E" => {
+                                    state.params.emissions_enabled ^= 1;
+                                    if state.params.emissions_enabled == 1 {
+                                        println!("Emissions ENABLED - particles will leave trails");
+                                    } else {
+                                        println!("Emissions DISABLED");
+                                    }
+                                    // Update GPU buffer
+                                    state.queue
+                                        .write_buffer(&state.params_buf, 0, bytemuck::bytes_of(&state.params));
                                 }
                                 _ => {}
                             }
