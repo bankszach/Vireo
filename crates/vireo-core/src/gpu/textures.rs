@@ -9,6 +9,8 @@ pub struct FieldTextures {
     pub view_a_store: TextureView,
     pub view_b_sample: TextureView,
     pub view_b_store: TextureView,
+    pub view_a_storage: TextureView,  // Storage texture view for RD source
+    pub view_b_storage: TextureView,  // Storage texture view for RD source
     pub size: [u32; 2],
 }
 
@@ -74,6 +76,29 @@ impl FieldTextures {
             array_layer_count: Some(1),
         });
         
+        // Create storage texture views for RD pipeline
+        let view_a_storage = texture_a.create_view(&TextureViewDescriptor {
+            label: Some("field_a_storage"),
+            format: Some(format),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            aspect: wgpu::TextureAspect::All,
+            base_mip_level: 0,
+            mip_level_count: Some(1),
+            base_array_layer: 0,
+            array_layer_count: Some(1),
+        });
+        
+        let view_b_storage = texture_b.create_view(&TextureViewDescriptor {
+            label: Some("field_b_storage"),
+            format: Some(format),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            aspect: wgpu::TextureAspect::All,
+            base_mip_level: 0,
+            mip_level_count: Some(1),
+            base_array_layer: 0,
+            array_layer_count: Some(1),
+        });
+        
         Self {
             texture_a,
             texture_b,
@@ -81,6 +106,8 @@ impl FieldTextures {
             view_a_store,
             view_b_sample,
             view_b_store,
+            view_a_storage,
+            view_b_storage,
             size,
         }
     }

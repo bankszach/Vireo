@@ -103,7 +103,7 @@ impl GpuDevice {
         let occupancy_data = vec![0u32; (size[0] * size[1]) as usize];
         self.create_buffer_with_data(
             "herbivore_occupancy",
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             &occupancy_data,
         )
     }

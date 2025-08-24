@@ -34,7 +34,7 @@ impl ComputePipelines {
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("rd_bgl"),
             entries: &[
-                // Source texture (R, W channels)
+                // Source texture (R, W channels) - sampled for reading
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
