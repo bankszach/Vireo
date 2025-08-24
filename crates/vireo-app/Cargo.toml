@@ -1,0 +1,14 @@
+[package]
+name = "vireo-app"
+version = "0.2.0"
+edition = "2021"
+authors = ["Human <human@example.com>"]
+license = "MIT"
+description = "Interactive Vireo ecosystem sandbox (stub for Sprint 1)"
+repository = "https://github.com/human/Vireo"
+
+[dependencies]
+vireo-core = { path = "../vireo-core" }
+winit = "0.29"
+pollster = "0.3"
+env_logger = "0.11"

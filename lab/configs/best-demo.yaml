@@ -1,0 +1,33 @@
+world:
+  size: [128, 128]
+  steps: 2000
+  dt: 0.1
+  seed: 1337
+
+field:
+  D_R: 0.5      # Resource diffusion coefficient
+  D_W: 0.2      # Waste diffusion coefficient
+  sigma_R: 0.005 # Resource replenishment rate
+  alpha_H: 0.1   # Herbivore resource uptake rate
+  beta_H: 0.05   # Herbivore waste emission rate
+  lambda_R: 0.005 # Resource decay rate
+  lambda_W: 0.005 # Waste decay rate
+
+chemotaxis:
+  chi_R: 8.0    # Resource attraction strength
+  chi_W: 4.0    # Waste repulsion strength
+  kappa: 2.0    # Gradient saturation parameter
+  gamma: 0.05   # Velocity damping
+  v_max: 2.0    # Maximum velocity
+  eps0: 0.02    # Basal energy drain rate
+  eta_R: 0.2    # Energy gain from resource
+
+agents:
+  herbivores: 2000
+  E0: 1.0       # Initial energy
+
+noise:
+  sigma: 0.0    # Noise standard deviation (disabled for demo)
+
+obstacles:
+  enabled: false # Obstacles disabled for Sprint 1

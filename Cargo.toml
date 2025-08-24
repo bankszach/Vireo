@@ -1,21 +1,16 @@
-[package]
-name = "vireo"
-version = "0.1.0"
-edition = "2021"
-authors = ["Human <human@example.com>"]
-license = "MIT"
-description = "An interactive ecosystem sandbox built on a custom GPU engine with diffusion fields and emergent behavior simulation."
-repository = "https://github.com/human/Vireo"
-homepage = "https://github.com/human/Vireo"
+[workspace]
+members = [
+    "crates/vireo-core",
+    "crates/vireo-headless", 
+    "crates/vireo-app"
+]
 
-[dependencies]
+[workspace.dependencies]
 wgpu = "0.19"
-winit = "0.29"
-pollster = "0.3"
 bytemuck = { version = "1.15", features = ["derive"] }
 glam = "0.27"
 rand = "0.8"
-env_logger = "0.11"
+rand_chacha = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
 half = "2.2"
-
-# Optional (fast math on nightly can be enabled by users if desired)
