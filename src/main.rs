@@ -2,6 +2,7 @@
 use std::time::Instant;
 use std::cmp::min;
 use std::f32;
+use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Vec2, vec2};
@@ -84,8 +85,9 @@ struct Pipelines {
     render_bgl: wgpu::BindGroupLayout,
 }
 
-struct Gfx<'a> {
-    surface: wgpu::Surface<'a>,
+struct Gfx {
+    window: Arc<winit::window::Window>,
+    surface: wgpu::Surface<'static>,
     adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -120,11 +122,11 @@ struct Gfx<'a> {
     use_a_as_src: bool,
 }
 
-impl Gfx<'_> {
-    async fn new(window: &winit::window::Window, grid_w: u32, grid_h: u32, particle_count: u32) -> Self {
+impl Gfx {
+    async fn new(window: Arc<winit::window::Window>, grid_w: u32, grid_h: u32, particle_count: u32) -> Self {
         let size = window.inner_size();
         let instance = wgpu::Instance::default();
-        let surface = unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(window).unwrap()) }.expect("surface");
+        let surface = instance.create_surface(window.clone()).expect("surface");
         let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
@@ -133,11 +135,8 @@ impl Gfx<'_> {
 
         let (device, queue) = adapter.request_device(
             &wgpu::DeviceDescriptor {
-                required_features: wgpu::Features::PUSH_CONSTANTS,
-                required_limits: wgpu::Limits {
-                    max_push_constant_size: 128,
-                    ..wgpu::Limits::default()
-                },
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
                 label: None,
             },
             None
@@ -159,12 +158,21 @@ impl Gfx<'_> {
             ..Default::default()
         });
 
+        // Prefer Fifo present mode for better compatibility, fall back to first available
+        let present_mode = surface_caps.present_modes.iter()
+            .find(|&&mode| mode == wgpu::PresentMode::Fifo)
+            .copied()
+            .unwrap_or(surface_caps.present_modes[0]);
+            
+        println!("Selected present mode: {:?}", present_mode);
+        println!("Available present modes: {:?}", surface_caps.present_modes);
+            
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             width: size.width.max(1),
             height: size.height.max(1),
-            present_mode: surface_caps.present_modes[0],
+            present_mode,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -240,7 +248,7 @@ impl Gfx<'_> {
         let target_herbivores = particle_count - target_plants - target_predators;  // ~86.6%
         
         // Spawn plants first - distribute them more evenly
-        for i in 0..target_plants {
+        for _ in 0..target_plants {
             let x = rng.gen_range(50.0..(world_w - 50.0));
             let y = rng.gen_range(50.0..(world_h - 50.0));
             let particle = Particle::new(vec2(x, y), 0);
@@ -267,7 +275,7 @@ impl Gfx<'_> {
         }
         
         // Spawn predators - more spread out to avoid clustering
-        for i in 0..target_predators {
+        for _ in 0..target_predators {
             let x = rng.gen_range(150.0..(world_w - 150.0));
             let y = rng.gen_range(150.0..(world_h - 150.0));
             let mut particle = Particle::new(vec2(x, y), 2);
@@ -386,6 +394,7 @@ impl Gfx<'_> {
         });
 
         let mut gfx = Self {
+            window,
             surface, adapter, device, queue, config, size,
             field_a, field_b,
             field_a_view_sample, field_a_view_store,
@@ -493,13 +502,28 @@ impl Gfx<'_> {
             }
         }
         
+        // Convert f32 data to half-precision floats for RGBA16F texture
+        let mut half_data = Vec::with_capacity(w * h * 4);
+        for &val in &data {
+            half_data.push(half::f16::from_f32(val));
+        }
+        
+        println!("Texture upload: {}x{} RGBA16F, {} bytes per row (f16)", w, h, w * 8);
+        
         // write into A (source)
         let layout = wgpu::ImageDataLayout {
             offset: 0,
-            bytes_per_row: Some((w*16) as u32), // 4 * f32
+            bytes_per_row: Some((w * 8) as u32), // 4 channels × 2 bytes (f16)
             rows_per_image: Some(h as u32),
         };
         let size = wgpu::Extent3d { width: self.params.grid_w, height: self.params.grid_h, depth_or_array_layers: 1 };
+        
+        // Convert half data to bytes manually since half::f16 doesn't implement Pod
+        let mut bytes = Vec::with_capacity(w * h * 8);
+        for &half_val in &half_data {
+            bytes.extend_from_slice(&half_val.to_le_bytes());
+        }
+        
         self.queue.write_texture(
             wgpu::ImageCopyTexture {
                 texture: &self.field_a,
@@ -507,7 +531,7 @@ impl Gfx<'_> {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            bytemuck::cast_slice(&data),
+            &bytes,
             layout,
             size
         );
@@ -810,12 +834,12 @@ fn main() {
     env_logger::init();
 
     let event_loop = EventLoop::new().unwrap();
-    let window = WindowBuilder::new()
+    let window = Arc::new(WindowBuilder::new()
         .with_title("Vireo — Ecosystem Sandbox")
         .with_inner_size(PhysicalSize::new(grid_w, grid_h))
-        .build(&event_loop).unwrap();
+        .build(&event_loop).unwrap());
 
-    let mut state = pollster::block_on(Gfx::new(&window, grid_w, grid_h, particle_count));
+    let mut state = pollster::block_on(Gfx::new(window.clone(), grid_w, grid_h, particle_count));
 
     let mut last = Instant::now();
     event_loop.run(move |event, elwt| {
