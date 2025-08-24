@@ -8,7 +8,8 @@ struct RDParams {
     lambda_W: f32, // Waste decay rate
     dt: f32,       // Time step
     size: vec2<u32>, // Grid size
-    _pad: vec2<u32>, // Padding for alignment
+    H_SCALE: f32,  // Herbivore density scale factor
+    _pad: u32,     // Padding for alignment
 }
 
 @group(0) @binding(0) var srcTex: texture_2d<f32>;
@@ -48,7 +49,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Get herbivore density at this cell
     let cell_idx = u32(cy * w + cx);
-    let H = f32(herbDensity[cell_idx]) / 1000.0; // Normalize occupancy
+    let H = min(f32(herbDensity[cell_idx]) * params.H_SCALE, 1.0); // Normalize occupancy with scale
 
     // Reaction-diffusion equations
     let dR = params.D_R * lapR + params.sigma_R - params.alpha_H * H * R - params.lambda_R * R;

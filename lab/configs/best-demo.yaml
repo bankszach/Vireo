@@ -12,12 +12,13 @@ field:
   beta_H: 0.05   # Herbivore waste emission rate
   lambda_R: 0.005 # Resource decay rate
   lambda_W: 0.005 # Waste decay rate
+  H_SCALE: 0.125 # Herbivore density scale factor (1/8 per agent per cell)
 
 chemotaxis:
-  chi_R: 8.0    # Resource attraction strength
+  chi_R: 8.0    # Resource attraction strength (high for strong chemotaxis)
   chi_W: 4.0    # Waste repulsion strength
   kappa: 2.0    # Gradient saturation parameter
-  gamma: 0.05   # Velocity damping
+  gamma: 0.05   # Velocity damping (low for sustained movement)
   v_max: 2.0    # Maximum velocity
   eps0: 0.02    # Basal energy drain rate
   eta_R: 0.2    # Energy gain from resource

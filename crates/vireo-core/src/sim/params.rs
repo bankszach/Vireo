@@ -77,7 +77,8 @@ pub struct RDParams {
     pub lambda_W: f32,
     pub dt: f32,
     pub size: [u32; 2],
-    pub _pad: [u32; 2], // Padding for alignment
+    pub H_SCALE: f32,  // Herbivore density scale factor
+    pub _pad: u32,     // Padding for alignment
 }
 
 /// GPU-compatible parameters for agent chemotaxis shader
@@ -149,7 +150,8 @@ impl From<&SimulationConfig> for RDParams {
             lambda_W: config.field.lambda_W,
             dt: config.world.dt,
             size: config.world.size,
-            _pad: [0, 0],
+            H_SCALE: 0.125, // 1/8 per agent per cell as starting point
+            _pad: 0,
         }
     }
 }

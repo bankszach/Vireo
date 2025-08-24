@@ -126,13 +126,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     a.vel = v;
     agents[i] = a;
 
-    // Write occupancy to grid (atomic increment would be better, but this works for now)
+    // Write occupancy to grid (simple increment for now)
     if (a.alive == 1u) {
         let cell_x = u32(clamp(floor(x.x), 0.0, params.size.x - 1.0));
         let cell_y = u32(clamp(floor(x.y), 0.0, params.size.y - 1.0));
         let cell_idx = cell_y * u32(params.size.x) + cell_x;
         
         // Simple increment (in a real implementation, use atomic operations)
+        // For now, this works for single-threaded agent updates
         herbOcc[cell_idx] += 1u;
     }
 }

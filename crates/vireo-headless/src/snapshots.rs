@@ -2,8 +2,9 @@ use std::path::PathBuf;
 use std::fs::File;
 use std::io::Write;
 use csv::Writer;
-use image::{ImageBuffer, Rgb, RgbImage};
+use image::{ImageBuffer, Rgb, RgbImage, Luma};
 use vireo_core::sim::{FieldManager, AgentManager};
+use anyhow::Result;
 
 /// Snapshot writer for field images and agent data
 pub struct SnapshotWriter {
@@ -99,4 +100,56 @@ impl SnapshotWriter {
         
         Ok(())
     }
+}
+
+/// Save field data as PNG image
+pub fn save_field_png(
+    field_data: &[f32],
+    size: [u32; 2],
+    output_path: &PathBuf,
+    channel: usize,
+) -> Result<()> {
+    let mut img = ImageBuffer::new(size[0], size[1]);
+    
+    for (x, y, pixel) in img.enumerate_pixels_mut() {
+        let idx = (y * size[0] + x) as usize * 4 + channel;
+        if idx < field_data.len() {
+            let value = field_data[idx];
+            // Normalize to 0-255 range, clamp to reasonable bounds
+            let normalized = ((value * 255.0).clamp(0.0, 255.0)) as u8;
+            *pixel = Luma([normalized]);
+        }
+    }
+    
+    img.save(output_path)?;
+    Ok(())
+}
+
+/// Save occupancy data as PNG image
+pub fn save_occupancy_png(
+    occupancy_data: &[u32],
+    size: [u32; 2],
+    output_path: &PathBuf,
+) -> Result<()> {
+    let mut img = ImageBuffer::new(size[0], size[1]);
+    
+    // Find max occupancy for normalization
+    let max_occupancy = *occupancy_data.iter().max().unwrap_or(&1) as f32;
+    
+    for (x, y, pixel) in img.enumerate_pixels_mut() {
+        let idx = (y * size[0] + x) as usize;
+        if idx < occupancy_data.len() {
+            let value = occupancy_data[idx] as f32;
+            // Normalize to 0-255 range based on max occupancy
+            let normalized = if max_occupancy > 0.0 {
+                ((value / max_occupancy) * 255.0).clamp(0.0, 255.0) as u8
+            } else {
+                0
+            };
+            *pixel = Luma([normalized]);
+        }
+    }
+    
+    img.save(output_path)?;
+    Ok(())
 }

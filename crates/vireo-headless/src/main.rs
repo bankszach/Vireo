@@ -2,6 +2,7 @@ mod metrics;
 mod snapshots;
 
 use clap::Parser;
+use clap::ValueEnum;
 use std::path::PathBuf;
 use std::time::Instant;
 use vireo_core::sim::SimulationConfig;
@@ -12,24 +13,35 @@ use metrics::MetricsWriter;
 use snapshots::SnapshotWriter;
 
 #[derive(Parser)]
-#[command(name = "vireo-headless")]
-#[command(about = "Headless CLI runner for Vireo ecosystem experiments")]
+#[command(author, version, about, long_about = None)]
 struct Cli {
     /// Configuration file path
-    #[arg(short, long, value_name = "FILE")]
+    #[arg(short, long, default_value = "lab/configs/best-demo.yaml")]
     config: PathBuf,
     
     /// Output directory for results
-    #[arg(short, long, value_name = "DIR")]
+    #[arg(short, long, default_value = "results")]
     out: PathBuf,
     
-    /// Enable strict mode (fail on any errors)
+    /// Enable strict validation
     #[arg(long)]
     strict: bool,
     
     /// Enable debug scenarios for testing individual components
     #[arg(long)]
     debug_scenario: bool,
+    
+    /// Test specific scenario: reaction-only, diffusion-only, uptake-only, damping-only
+    #[arg(long, value_enum)]
+    scenario: Option<Scenario>,
+}
+
+#[derive(ValueEnum, Clone)]
+enum Scenario {
+    ReactionOnly,
+    DiffusionOnly,
+    UptakeOnly,
+    DampingOnly,
 }
 
 fn main() -> Result<(), anyhow::Error> {
@@ -90,20 +102,58 @@ fn main() -> Result<(), anyhow::Error> {
     let mut debug_rd_params = rd_params;
     let mut debug_agent_params = agent_params;
     
-    if cli.debug_scenario {
+    if cli.debug_scenario || cli.scenario.is_some() {
         println!("DEBUG SCENARIO: Using modified parameters for testing");
-        // Test 1: Pure reaction (no diffusion, no uptake) - R should increase
-        debug_rd_params.D_R = 0.0;
-        debug_rd_params.D_W = 0.0;
-        debug_rd_params.lambda_R = 0.0;
-        debug_rd_params.lambda_W = 0.0;
-        debug_rd_params.alpha_H = 0.0; // No herbivore uptake
-        debug_rd_params.sigma_R = 0.02; // High replenishment
         
-        // Test 2: Pure damping (no chemotaxis) - velocity should decay
-        debug_agent_params.chi_R = 0.0;
-        debug_agent_params.chi_W = 0.0;
-        debug_agent_params.gamma = 0.2; // High damping
+        match cli.scenario.as_ref() {
+            Some(Scenario::ReactionOnly) => {
+                println!("SCENARIO: Reaction-only (σ>0, λ=0, D=0) → mean R ↑");
+                // Test 1: Pure reaction (no diffusion, no uptake) - R should increase
+                debug_rd_params.D_R = 0.0;
+                debug_rd_params.D_W = 0.0;
+                debug_rd_params.lambda_R = 0.0;
+                debug_rd_params.lambda_W = 0.0;
+                debug_rd_params.alpha_H = 0.0; // No herbivore uptake
+                debug_rd_params.sigma_R = 0.02; // High replenishment
+            }
+            Some(Scenario::DiffusionOnly) => {
+                println!("SCENARIO: Diffusion-only (D>0, σ=λ=0) → max↓, min↑, mean steady");
+                // Test 2: Pure diffusion (no reaction, no uptake) - max↓, min↑, mean steady
+                debug_rd_params.sigma_R = 0.0;
+                debug_rd_params.lambda_R = 0.0;
+                debug_rd_params.alpha_H = 0.0; // No herbivore uptake
+                debug_rd_params.D_R = 1.0; // High diffusion
+            }
+            Some(Scenario::UptakeOnly) => {
+                println!("SCENARIO: Uptake-only (σ=0, H>0) → mean R ↓");
+                // Test 3: Pure uptake (no replenishment, herbivores consume) - mean R ↓
+                debug_rd_params.sigma_R = 0.0; // No replenishment
+                debug_rd_params.alpha_H = 0.2; // High herbivore uptake
+                debug_rd_params.D_R = 0.0; // No diffusion
+            }
+            Some(Scenario::DampingOnly) => {
+                println!("SCENARIO: Damping-only (χ=0, γ>0) → mean v ↓");
+                // Test 4: Pure damping (no chemotaxis) - velocity should decay
+                debug_agent_params.chi_R = 0.0;
+                debug_agent_params.chi_W = 0.0;
+                debug_agent_params.gamma = 0.2; // High damping
+            }
+            None => {
+                // Default debug scenario (original logic)
+                // Test 1: Pure reaction (no diffusion, no uptake) - R should increase
+                debug_rd_params.D_R = 0.0;
+                debug_rd_params.D_W = 0.0;
+                debug_rd_params.lambda_R = 0.0;
+                debug_rd_params.lambda_W = 0.0;
+                debug_rd_params.alpha_H = 0.0; // No herbivore uptake
+                debug_rd_params.sigma_R = 0.02; // High replenishment
+                
+                // Test 2: Pure damping (no chemotaxis) - velocity should decay
+                debug_agent_params.chi_R = 0.0;
+                debug_agent_params.chi_W = 0.0;
+                debug_agent_params.gamma = 0.2; // High damping
+            }
+        }
         
         println!("DEBUG RD params: D_R={} sigma_R={} lambda_R={} alpha_H={}", 
             debug_rd_params.D_R, debug_rd_params.sigma_R, debug_rd_params.lambda_R, debug_rd_params.alpha_H);
@@ -230,6 +280,43 @@ fn main() -> Result<(), anyhow::Error> {
             } // cpass is dropped here
             
             gpu.submit(encoder.finish());
+        }
+        
+        // Save occupancy PNG at specific steps
+        if step == 0 || step == 200 || step == 1000 || step == 2000 {
+            // Read back occupancy buffer for PNG dump
+            let staging_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("occupancy_png_staging"),
+                size: (config.world.size[0] * config.world.size[1] * 4) as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            
+            let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("occupancy_png_copy"),
+            });
+            encoder.copy_buffer_to_buffer(&occupancy_buffer, 0, &staging_buffer, 0, (config.world.size[0] * config.world.size[1] * 4) as u64);
+            gpu.submit(encoder.finish());
+            
+            staging_buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            gpu.device.poll(wgpu::Maintain::Wait);
+            
+            let data = staging_buffer.slice(..).get_mapped_range();
+            let occupancy_data: Vec<u32> = data
+                .chunks_exact(4)
+                .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .collect();
+            
+            drop(data);
+            staging_buffer.unmap();
+            
+            // Save occupancy PNG
+            let png_path = cli.out.join(format!("occupancy_{:04}.png", step));
+            if let Err(e) = snapshots::save_occupancy_png(&occupancy_data, config.world.size, &png_path) {
+                eprintln!("Warning: Failed to save occupancy PNG: {}", e);
+            } else {
+                println!("Saved occupancy PNG: {}", png_path.display());
+            }
         }
         
         // Debug: Check occupancy after agent pass (every 100 steps)

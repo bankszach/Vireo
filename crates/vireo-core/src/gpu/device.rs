@@ -108,6 +108,12 @@ impl GpuDevice {
         )
     }
     
+    /// Clear the occupancy buffer to zero (called each frame before agent update)
+    pub fn clear_occupancy_buffer(&self, buffer: &wgpu::Buffer, size: [u32; 2]) {
+        let zero_data = vec![0u32; (size[0] * size[1]) as usize];
+        self.queue.write_buffer(buffer, 0, bytemuck::cast_slice(&zero_data));
+    }
+    
     /// Submit commands to the GPU
     pub fn submit(&self, commands: wgpu::CommandBuffer) {
         self.queue.submit(Some(commands));

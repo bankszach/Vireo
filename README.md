@@ -42,6 +42,26 @@ cargo run --release
 cargo run
 ```
 
+### Run the Demo
+
+For headless experiments and long-running simulations:
+
+```bash
+# Run the closed-loop cycles demo (v0.3 milestone)
+cargo run --release --package vireo-headless -- --config lab/configs/best-demo.yaml --out results
+
+# Test individual components with debug scenarios
+cargo run --release --package vireo-headless -- --scenario reaction-only --out results
+cargo run --release --package vireo-headless -- --scenario diffusion-only --out results
+cargo run --release --package vireo-headless -- --scenario uptake-only --out results
+cargo run --release --package vireo-headless -- --scenario damping-only --out results
+```
+
+The demo will run 2000 steps on a 128×128 grid with 2000 herbivores, producing:
+- `metrics.csv` with cycle scores and foraging efficiency
+- `occupancy_*.png` snapshots at steps 0, 200, 1000, 2000
+- Field evolution visualizations
+
 ### Demo Controls
 - `Space` — pause/resume simulation
 - `R` — re-seed the environment
