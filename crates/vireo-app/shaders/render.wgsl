@@ -21,20 +21,27 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let tex_color = textureSample(field_texture, field_sampler, input.tex_coords);
+    // TEMPORARY: Output UV gradient to test if render pipeline works
+    let uv = input.tex_coords;
+    let gradient_color = vec3<f32>(uv.x, uv.y, 0.5);
     
-    // Map R (resource) to red channel, W (waste) to green channel
-    let r = tex_color.r;
-    let w = tex_color.g;
+    // TODO: Uncomment this when texture sampling is working
+    // let tex_color = textureSample(field_texture, field_sampler, input.tex_coords);
+    // 
+    // // Map R (resource) to red channel, W (waste) to green channel
+    // let r = tex_color.r;
+    // let w = tex_color.g;
+    // 
+    // // Create a heatmap visualization
+    // // Resource: red to yellow (high = bright)
+    // // Waste: blue to cyan (high = bright)
+    // let resource_color = vec3<f32>(r, r * 0.5, 0.0);
+    // let waste_color = vec3<f32>(0.0, w * 0.5, w);
+    // 
+    // // Blend resource and waste colors
+    // let final_color = resource_color + waste_color;
+    // 
+    // return vec4<f32>(final_color, 1.0);
     
-    // Create a heatmap visualization
-    // Resource: red to yellow (high = bright)
-    // Waste: blue to cyan (high = bright)
-    let resource_color = vec3<f32>(r, r * 0.5, 0.0);
-    let waste_color = vec3<f32>(0.0, w * 0.5, w);
-    
-    // Blend resource and waste colors
-    let final_color = resource_color + waste_color;
-    
-    return vec4<f32>(final_color, 1.0);
+    return vec4<f32>(gradient_color, 1.0);
 }

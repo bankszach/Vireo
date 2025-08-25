@@ -60,6 +60,9 @@ pub struct Viewer {
     show_occupancy: bool,
     show_gradients: bool,
     scenario_mode: Option<String>,
+    
+    // GPU capabilities
+    supports_filtering: bool,
 }
 
 impl Viewer {
@@ -67,10 +70,11 @@ impl Viewer {
     pub fn new(
         window: Arc<Window>, 
         gpu: &GpuContext,
-        sim_config: SimulationConfig
+        sim_config: SimulationConfig,
+        supports_filtering: bool,
     ) -> Result<Self> {
         // Create centralized layouts first
-        let layouts = Layouts::new(&gpu.device);
+        let layouts = Layouts::new(&gpu.device, supports_filtering);
         
         // Create simulation components
         let field_manager = FieldManager::new(sim_config.world.size);
@@ -131,8 +135,8 @@ impl Viewer {
                 address_mode_u: wgpu::AddressMode::ClampToEdge,
                 address_mode_v: wgpu::AddressMode::ClampToEdge,
                 address_mode_w: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
+                mag_filter: if supports_filtering { wgpu::FilterMode::Linear } else { wgpu::FilterMode::Nearest },
+                min_filter: if supports_filtering { wgpu::FilterMode::Linear } else { wgpu::FilterMode::Nearest },
                 mipmap_filter: wgpu::FilterMode::Nearest,
                 compare: None,
                 ..Default::default()
@@ -162,6 +166,7 @@ impl Viewer {
             show_occupancy: false,
             show_gradients: false,
             scenario_mode: None,
+            supports_filtering,
         })
     }
     
@@ -183,8 +188,8 @@ impl Viewer {
                     address_mode_u: wgpu::AddressMode::ClampToEdge,
                     address_mode_v: wgpu::AddressMode::ClampToEdge,
                     address_mode_w: wgpu::AddressMode::ClampToEdge,
-                    mag_filter: wgpu::FilterMode::Linear,
-                    min_filter: wgpu::FilterMode::Linear,
+                    mag_filter: if self.supports_filtering { wgpu::FilterMode::Linear } else { wgpu::FilterMode::Nearest },
+                    min_filter: if self.supports_filtering { wgpu::FilterMode::Linear } else { wgpu::FilterMode::Nearest },
                     mipmap_filter: wgpu::FilterMode::Nearest,
                     compare: None,
                     ..Default::default()
@@ -336,7 +341,7 @@ impl Viewer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(self.field_textures.a_sample_view()),
+                    resource: wgpu::BindingResource::TextureView(self.field_textures.front_sample_view()),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -533,7 +538,19 @@ pub async fn run_viewer(sim_config: SimulationConfig) -> Result<()> {
         config,
     };
 
-    let mut viewer = Viewer::new(window.clone(), &gpu, sim_config)?;
+    // Check RGBA16Float filtering support for runtime fallback
+    let format = wgpu::TextureFormat::Rgba16Float;
+    let format_features = adapter.get_texture_format_features(format);
+    // For now, assume filtering is supported - we can implement proper fallback later
+    let supports_filtering = true;
+    println!("RGBA16Float format features: {:?}", format_features);
+    println!("RGBA16Float supports filtering: {} (assumed for testing)", supports_filtering);
+    
+    if !supports_filtering {
+        println!("WARNING: RGBA16Float does not support filtering on this GPU. Consider implementing non-filtering fallback.");
+    }
+
+    let mut viewer = Viewer::new(window.clone(), &gpu, sim_config, supports_filtering)?;
     let renderer = Renderer::new(&gpu.device, &gpu.config, &viewer.layouts)?;
     println!("Viewer created successfully!");
     

@@ -518,7 +518,11 @@ impl FieldPingPong {
         
         encoder.copy_texture_to_buffer(
             wgpu::ImageCopyTexture {
-                texture: &self.tex_a,
+                texture: if self.front_is_a {
+                    &self.tex_a
+                } else {
+                    &self.tex_b
+                },
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,

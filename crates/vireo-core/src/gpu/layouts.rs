@@ -21,11 +21,11 @@ pub struct Layouts {
 
 impl Layouts {
     /// Create all bind group layouts once
-    pub fn new(device: &Device) -> Self {
+    pub fn new(device: &Device, supports_filtering: bool) -> Self {
         let rd = Self::create_rd_layout(device);
         let agent = Self::create_agent_layout(device);
         let clear_occupancy = Self::create_clear_occupancy_layout(device);
-        let render = Self::create_render_layout(device);
+        let render = Self::create_render_layout(device, supports_filtering);
         
         Self {
             rd,
@@ -173,7 +173,7 @@ impl Layouts {
     }
     
     /// Create the render shader layout
-    fn create_render_layout(device: &Device) -> BindGroupLayout {
+    fn create_render_layout(device: &Device, supports_filtering: bool) -> BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("render_bgl"),
             entries: &[
@@ -182,7 +182,7 @@ impl Layouts {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: supports_filtering },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -192,7 +192,11 @@ impl Layouts {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    ty: wgpu::BindingType::Sampler(if supports_filtering {
+                        wgpu::SamplerBindingType::Filtering
+                    } else {
+                        wgpu::SamplerBindingType::NonFiltering
+                    }),
                     count: None,
                 },
             ],
