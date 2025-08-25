@@ -172,7 +172,7 @@ impl FieldPingPong {
         // Create bind groups for rendering (show A and show B) using borrowed layouts
         let show_a_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("show_a_bg"),
-            layout: &layouts.render, // borrow the layout
+            layout: &layouts.field_render, // borrow the field render layout
             entries: &[
                 // @binding(0) field A texture
                 wgpu::BindGroupEntry {
@@ -189,9 +189,9 @@ impl FieldPingPong {
 
         let show_b_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("show_b_bg"),
-            layout: &layouts.render, // borrow the layout
+            layout: &layouts.field_render, // borrow the field render layout
             entries: &[
-                // @binding(0) field B texture
+                // @binding(1) field B texture
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: wgpu::BindingResource::TextureView(&view_b_sample),
@@ -357,7 +357,7 @@ impl FieldPingPong {
 
         self.show_a_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("show_a_bg"),
-            layout: &layouts.render,
+            layout: &layouts.field_render,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -372,7 +372,7 @@ impl FieldPingPong {
 
         self.show_b_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("show_b_bg"),
-            layout: &layouts.render,
+            layout: &layouts.field_render,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,

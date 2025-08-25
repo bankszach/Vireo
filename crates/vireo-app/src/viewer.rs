@@ -10,6 +10,7 @@ use winit::{
 };
 use wgpu::{Instance, Device, Queue, Surface, SurfaceConfiguration, RequestAdapterOptions, util::DeviceExt};
 use anyhow::Result;
+use bytemuck;
 
 use vireo_params::SimulationConfig;
 use vireo_core::{
@@ -60,9 +61,6 @@ pub struct Viewer {
     show_occupancy: bool,
     show_gradients: bool,
     scenario_mode: Option<String>,
-    
-    // GPU capabilities
-    supports_filtering: bool,
 }
 
 impl Viewer {
@@ -71,10 +69,9 @@ impl Viewer {
         window: Arc<Window>, 
         gpu: &GpuContext,
         sim_config: SimulationConfig,
-        supports_filtering: bool,
     ) -> Result<Self> {
         // Create centralized layouts first
-        let layouts = Layouts::new(&gpu.device, supports_filtering);
+        let layouts = Layouts::new(&gpu.device);
         
         // Create simulation components
         let field_manager = FieldManager::new(sim_config.world.size);
@@ -135,8 +132,8 @@ impl Viewer {
                 address_mode_u: wgpu::AddressMode::ClampToEdge,
                 address_mode_v: wgpu::AddressMode::ClampToEdge,
                 address_mode_w: wgpu::AddressMode::ClampToEdge,
-                mag_filter: if supports_filtering { wgpu::FilterMode::Linear } else { wgpu::FilterMode::Nearest },
-                min_filter: if supports_filtering { wgpu::FilterMode::Linear } else { wgpu::FilterMode::Nearest },
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
                 mipmap_filter: wgpu::FilterMode::Nearest,
                 compare: None,
                 ..Default::default()
@@ -166,7 +163,6 @@ impl Viewer {
             show_occupancy: false,
             show_gradients: false,
             scenario_mode: None,
-            supports_filtering,
         })
     }
     
@@ -188,8 +184,8 @@ impl Viewer {
                     address_mode_u: wgpu::AddressMode::ClampToEdge,
                     address_mode_v: wgpu::AddressMode::ClampToEdge,
                     address_mode_w: wgpu::AddressMode::ClampToEdge,
-                    mag_filter: if self.supports_filtering { wgpu::FilterMode::Linear } else { wgpu::FilterMode::Nearest },
-                    min_filter: if self.supports_filtering { wgpu::FilterMode::Linear } else { wgpu::FilterMode::Nearest },
+                    mag_filter: wgpu::FilterMode::Linear,
+                    min_filter: wgpu::FilterMode::Linear,
                     mipmap_filter: wgpu::FilterMode::Nearest,
                     compare: None,
                     ..Default::default()
@@ -247,8 +243,21 @@ impl Viewer {
             label: Some("render_encoder"),
         });
         
-        // Render the field
-        renderer.render(&mut encoder, &view, &self.field_textures)?;
+        // Create SimParams buffer for this frame
+        let sim_params = [
+            0.0, 0.0,  // camera_pos: centered
+            1.0,        // camera_zoom: default zoom
+            self.current_step as f32 * 0.016, // time: 60 FPS
+            0.0,        // padding
+        ];
+        let sim_params_buffer = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("sim_params_frame"),
+            contents: bytemuck::cast_slice(&sim_params),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        
+        // Render the particles
+        renderer.render(&gpu.device, &mut encoder, &view, &sim_params_buffer, &self.agents_buffer, self.sim_config.agents.herbivores, &self.layouts.particle_render)?;
         
         gpu.queue.submit(Some(encoder.finish()));
         output.present();
@@ -550,7 +559,7 @@ pub async fn run_viewer(sim_config: SimulationConfig) -> Result<()> {
         println!("WARNING: RGBA16Float does not support filtering on this GPU. Consider implementing non-filtering fallback.");
     }
 
-    let mut viewer = Viewer::new(window.clone(), &gpu, sim_config, supports_filtering)?;
+    let mut viewer = Viewer::new(window.clone(), &gpu, sim_config)?;
     let renderer = Renderer::new(&gpu.device, &gpu.config, &viewer.layouts)?;
     println!("Viewer created successfully!");
     

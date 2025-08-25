@@ -1,17 +1,13 @@
 //! Renderer for the Vireo ecosystem simulation
 
-use wgpu::{SurfaceConfiguration, CommandEncoder, TextureView, util::DeviceExt};
+use wgpu::{SurfaceConfiguration, CommandEncoder, TextureView};
 use anyhow::Result;
-use bytemuck;
 
-use vireo_core::gpu::{FieldPingPong, layouts::Layouts};
+use vireo_core::gpu::layouts::Layouts;
 
-/// Simple renderer for displaying field textures
+/// Simple renderer for displaying particles
 pub struct Renderer {
     render_pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    num_indices: u32,
 }
 
 impl Renderer {
@@ -23,35 +19,35 @@ impl Renderer {
     ) -> Result<Self> {
         // Create shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("field_render_shader"),
+            label: Some("particle_render_shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/render.wgsl").into()),
         });
 
-        // Use the centralized render layout
-        let bind_group_layout = &layouts.render;
+        // Use the centralized particle render layout
+        let bind_group_layout = &layouts.particle_render;
 
         // Create pipeline layout
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("field_pipeline_layout"),
+            label: Some("particle_pipeline_layout"),
             bind_group_layouts: &[bind_group_layout],
             push_constant_ranges: &[],
         });
 
         // Create render pipeline
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("field_render_pipeline"),
+            label: Some("particle_render_pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",
-                buffers: &[Vertex::desc()],
+                buffers: &[], // No vertex buffers needed for instanced particles
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: "fs_main",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -73,50 +69,44 @@ impl Renderer {
             multiview: None,
         });
 
-        // Create vertex and index buffers for a full-screen quad
-        let vertices = [
-            Vertex { position: [-1.0, -1.0], tex_coords: [0.0, 1.0] },
-            Vertex { position: [1.0, -1.0], tex_coords: [1.0, 1.0] },
-            Vertex { position: [1.0, 1.0], tex_coords: [1.0, 0.0] },
-            Vertex { position: [-1.0, 1.0], tex_coords: [0.0, 0.0] },
-        ];
-
-        let indices = [0, 1, 2, 0, 2, 3];
-
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("field_vertex_buffer"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("field_index_buffer"),
-            contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
         Ok(Self {
             render_pipeline,
-            vertex_buffer,
-            index_buffer,
-            num_indices: indices.len() as u32,
         })
     }
     
-    /// Render the field texture
+    /// Render the particles
     pub fn render(
         &self,
+        device: &wgpu::Device,
         encoder: &mut CommandEncoder,
         view: &TextureView,
-        field_textures: &FieldPingPong,
+        sim_params_buffer: &wgpu::Buffer,
+        particles_buffer: &wgpu::Buffer,
+        particle_count: u32,
+        render_layout: &wgpu::BindGroupLayout,
     ) -> Result<()> {
         // Debug: log render call
-        println!("Renderer: Starting field render pass");
-        println!("Renderer: Field size: {:?}", field_textures.size());
-        println!("Renderer: Front is A: {}", field_textures.front_is_a());
+        println!("Renderer: Starting particle render pass");
+        println!("Renderer: Particle count: {}", particle_count);
+        
+        // Create bind group for particle rendering BEFORE the render pass
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("particle_render_bind_group"),
+            layout: render_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: sim_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: particles_buffer.as_entire_binding(),
+                },
+            ],
+        });
         
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("field_render_pass"),
+            label: Some("particle_render_pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
                 resolve_target: None,
@@ -136,47 +126,12 @@ impl Renderer {
         });
 
         render_pass.set_pipeline(&self.render_pipeline);
+        render_pass.set_bind_group(0, &bind_group, &[]);
         
-        // Use the centralized render bind group from FieldPingPong
-        // This bind group contains the field texture and sampler
-        let bind_group = field_textures.render_bind_group();
-        println!("Renderer: Using bind group for front texture");
-        render_pass.set_bind_group(0, bind_group, &[]);
-        
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-        render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+        // Draw particles: 6 vertices per quad, particle_count instances
+        render_pass.draw(0..6, 0..particle_count);
 
-        println!("Renderer: Field render pass completed");
+        println!("Renderer: Particle render pass completed");
         Ok(())
-    }
-}
-
-/// Vertex structure for rendering
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct Vertex {
-    position: [f32; 2],
-    tex_coords: [f32; 2],
-}
-
-impl Vertex {
-    fn desc() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x2,
-                },
-                wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x2,
-                },
-            ],
-        }
     }
 }

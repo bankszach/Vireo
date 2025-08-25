@@ -15,23 +15,28 @@ pub struct Layouts {
     /// Clear occupancy compute shader layout
     pub clear_occupancy: BindGroupLayout,
     
-    /// Render shader layout (sampler + sampled field)
-    pub render: BindGroupLayout,
+    /// Field render shader layout (sampler + sampled field)
+    pub field_render: BindGroupLayout,
+    
+    /// Particle render shader layout (uniform + storage buffer)
+    pub particle_render: BindGroupLayout,
 }
 
 impl Layouts {
     /// Create all bind group layouts once
-    pub fn new(device: &Device, supports_filtering: bool) -> Self {
+    pub fn new(device: &Device) -> Self {
         let rd = Self::create_rd_layout(device);
         let agent = Self::create_agent_layout(device);
         let clear_occupancy = Self::create_clear_occupancy_layout(device);
-        let render = Self::create_render_layout(device, supports_filtering);
+        let field_render = Self::create_field_render_layout(device);
+        let particle_render = Self::create_particle_render_layout(device);
         
         Self {
             rd,
             agent,
             clear_occupancy,
-            render,
+            field_render,
+            particle_render,
         }
     }
     
@@ -172,17 +177,17 @@ impl Layouts {
         })
     }
     
-    /// Create the render shader layout
-    fn create_render_layout(device: &Device, supports_filtering: bool) -> BindGroupLayout {
+    /// Create the field render shader layout
+    fn create_field_render_layout(device: &Device) -> BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("render_bgl"),
+            label: Some("field_render_bgl"),
             entries: &[
-                // @binding(0) sampled field texture
+                // @binding(0) field texture (sampled)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: supports_filtering },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -192,11 +197,38 @@ impl Layouts {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(if supports_filtering {
-                        wgpu::SamplerBindingType::Filtering
-                    } else {
-                        wgpu::SamplerBindingType::NonFiltering
-                    }),
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        })
+    }
+    
+    /// Create the particle render shader layout
+    fn create_particle_render_layout(device: &Device) -> BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("particle_render_bgl"),
+            entries: &[
+                // @binding(0) SimParams uniform buffer
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // @binding(1) particles storage buffer (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
             ],
