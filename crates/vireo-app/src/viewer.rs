@@ -784,15 +784,12 @@ pub async fn run_viewer(sim_config: SimulationConfig) -> Result<()> {
     // Use a simpler approach that ensures simulation runs
     let mut last_update = Instant::now();
     let target_fps = 60.0;
-    let frame_duration = Duration::from_secs_f64(1.0 / target_fps);
+    let frame = Duration::from_secs_f64(1.0 / target_fps);
     
     event_loop.run(move |event, elwt| {
         match event {
-            Event::WindowEvent {
-                ref event,
-                window_id,
-            } if window_id == viewer.window.id() => {
-                println!("Window event: {:?}", event);
+            // Handle window input etc.
+            Event::WindowEvent { window_id, event } if window_id == viewer.window.id() => {
                 match event {
                     WindowEvent::CloseRequested => {
                         println!("Window close requested");
@@ -800,9 +797,7 @@ pub async fn run_viewer(sim_config: SimulationConfig) -> Result<()> {
                     }
                     WindowEvent::Resized(physical_size) => {
                         println!("Window resized to {:?}", physical_size);
-                        viewer.resize(&mut gpu, *physical_size);
-                        // Request a redraw after resize
-                        viewer.window.request_redraw();
+                        viewer.resize(&mut gpu, physical_size);
                     }
                     WindowEvent::KeyboardInput {
                         event: KeyEvent {
@@ -824,18 +819,26 @@ pub async fn run_viewer(sim_config: SimulationConfig) -> Result<()> {
                         ..
                     } => {
                         println!("Key pressed: {:?}", logical_key);
-                        if let Err(e) = viewer.handle_key(logical_key) {
+                        if let Err(e) = viewer.handle_key(&logical_key) {
                             log::error!("Key handling error: {}", e);
                         }
                     }
                     _ => {}
                 }
             }
+            
+            // Handle redraw requests - this should work for continuous rendering
             Event::WindowEvent {
                 event: WindowEvent::RedrawRequested,
                 ..
             } => {
-                println!("Redraw requested - starting update");
+                println!("RedrawRequested - starting update");
+                
+                // Fixed timestep update
+                let now = Instant::now();
+                let real_dt = (now - last_update).as_secs_f32();
+                last_update = now;
+                
                 // Update simulation
                 if let Err(e) = viewer.update(&gpu) {
                     log::error!("Simulation update error: {}", e);
@@ -855,12 +858,19 @@ pub async fn run_viewer(sim_config: SimulationConfig) -> Result<()> {
                 
                 // Schedule next frame
                 let now = Instant::now();
-                if now.duration_since(last_update) >= frame_duration {
+                if now.duration_since(last_update) >= frame {
                     last_update = now;
                     println!("Scheduling next frame");
                     viewer.window.request_redraw();
                 }
             }
+            
+            // Schedule next frame at ~60Hz and request a redraw
+            Event::AboutToWait => {
+                elwt.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(Instant::now() + frame));
+                viewer.window.request_redraw();
+            }
+            
             _ => {
                 println!("Other event: {:?}", event);
             }
