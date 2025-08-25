@@ -8,23 +8,24 @@ struct VertexOutput {
     @location(0) color: vec4<f32>,
 }
 
-@group(0) @binding(0) var sim_params: SimParams;
-@group(0) @binding(1) var particles: array<Particle>;
+@group(0) @binding(0) var<uniform> sim_params: SimParams;
+@group(0) @binding(1) var<storage, read> particles: array<Particle>;
 
 struct SimParams {
-    camera_pos: vec2<f32>,
-    camera_zoom: f32,
+    world_size: vec2<f32>,
     time: f32,
-    _pad: f32,
+    zoom: f32,
+    camera: vec2<f32>,
+    _pad0: vec2<f32>, // pad so struct size is multiple of 16
 }
 
 struct Particle {
     pos: vec2<f32>,
     vel: vec2<f32>,
-    energy: f32,
     kind: u32,
-    alive: u32,
-    _pad: vec2<f32>,
+    flags: u32,
+    energy: f32,
+    _pad1: f32, // pad so each element is 32B (16-aligned)
 }
 
 @vertex
@@ -35,21 +36,17 @@ fn vs_main(
     let P = particles[inst];
     
     // Create a small quad for each particle
-    let quad_size = 0.02 * sim_params.camera_zoom;
-    let quad_vertices = array<vec2<f32>, 6>(
-        vec2<f32>(-quad_size, -quad_size),  // bottom-left
-        vec2<f32>( quad_size, -quad_size),  // bottom-right
-        vec2<f32>( quad_size,  quad_size),  // top-right
-        vec2<f32>(-quad_size, -quad_size),  // bottom-left
-        vec2<f32>( quad_size,  quad_size),  // top-right
-        vec2<f32>(-quad_size,  quad_size)   // top-left
-    );
+    let quad_size = 0.02 * sim_params.zoom;
     
-    let vertex_pos = quad_vertices[vid];
+    // Simple quad generation using basic math
+    let x = select(-quad_size, quad_size, vid >= 1u && vid <= 2u);
+    let y = select(-quad_size, quad_size, vid == 2u || vid == 4u || vid == 5u);
+    
+    let vertex_pos = vec2<f32>(x, y);
     let world_pos = P.pos + vertex_pos;
     
     // Convert to clip space
-    let clip_pos = (world_pos - sim_params.camera_pos) * sim_params.camera_zoom;
+    let clip_pos = (world_pos - sim_params.camera) * sim_params.zoom;
     
     // Color based on particle kind
     let kind = P.kind;

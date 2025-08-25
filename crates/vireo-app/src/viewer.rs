@@ -106,7 +106,7 @@ impl Viewer {
         });
         
         let agents_buffer = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("agents"),
+            label: Some("agents_buffer"),
             contents: bytemuck::cast_slice(&agent_manager.agents),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
@@ -245,10 +245,14 @@ impl Viewer {
         
         // Create SimParams buffer for this frame
         let sim_params = [
-            0.0, 0.0,  // camera_pos: centered
-            1.0,        // camera_zoom: default zoom
-            self.current_step as f32 * 0.016, // time: 60 FPS
-            0.0,        // padding
+            self.sim_config.world.size[0] as f32,  // world_size.x
+            self.sim_config.world.size[1] as f32,  // world_size.y
+            self.current_step as f32 * 0.016,      // time: 60 FPS
+            1.0,                                   // zoom: default zoom
+            0.0,                                   // camera.x: centered
+            0.0,                                   // camera.y: centered
+            0.0,                                   // _pad0.x
+            0.0,                                   // _pad0.y
         ];
         let sim_params_buffer = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("sim_params_frame"),
