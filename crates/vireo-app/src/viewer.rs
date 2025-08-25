@@ -1,7 +1,7 @@
 //! Interactive viewer for the Vireo ecosystem simulation
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use winit::{
     event::{Event, WindowEvent, ElementState, KeyEvent},
     event_loop::EventLoop,
@@ -21,6 +21,51 @@ use vireo_core::{
 };
 
 use crate::renderer::Renderer;
+
+/// Simulation controls for play/pause/speed/reset
+#[derive(Debug)]
+struct Controls {
+    paused: bool,
+    speed: f32,
+    step_once: bool,
+    emissions_enabled: bool,
+    reset_requested: bool,
+}
+
+impl Default for Controls {
+    fn default() -> Self {
+        Self {
+            paused: false,
+            speed: 1.0,
+            step_once: false,
+            emissions_enabled: true,
+            reset_requested: false,
+        }
+    }
+}
+
+/// Fixed timestep clock for stable simulation
+#[derive(Debug)]
+struct Clock {
+    last: Instant,
+    acc: f32,
+}
+
+impl Clock {
+    fn new() -> Self {
+        Self {
+            last: Instant::now(),
+            acc: 0.0,
+        }
+    }
+    
+    fn advance(&mut self) -> f32 {
+        let now = Instant::now();
+        let dt = (now - self.last).as_secs_f32();
+        self.last = now;
+        dt
+    }
+}
 
 /// Central GPU context that owns all GPU resources
 pub struct GpuContext {
@@ -55,8 +100,11 @@ pub struct Viewer {
     // Simulation parameters
     sim_config: SimulationConfig,
     current_step: u32,
-    last_frame_time: Instant,
     frame_count: u32,
+    
+    // Simulation control and timing
+    controls: Controls,
+    clock: Clock,
     
     // Overlay state
     show_r_field: bool,
@@ -163,8 +211,9 @@ impl Viewer {
             field_sampler,
             sim_config,
             current_step: 0,
-            last_frame_time: Instant::now(),
             frame_count: 0,
+            controls: Controls::default(),
+            clock: Clock::new(),
             show_r_field: true,
             show_w_field: false,
             show_occupancy: false,
@@ -206,24 +255,67 @@ impl Viewer {
     
     /// Update the simulation state
     pub fn update(&mut self, gpu: &GpuContext) -> Result<()> {
+        println!("Update: starting simulation update");
+        // Fixed timestep simulation
+        const BASE_DT: f32 = 1.0 / 60.0; // sim seconds per logical step
+        
+        let real_dt = self.clock.advance();
+        self.clock.acc += real_dt * self.controls.speed;
+        println!("Update: real_dt={:.6}, acc={:.6}, speed={:.2}", real_dt, self.clock.acc, self.controls.speed);
+        
+        // Handle reset request
+        if self.controls.reset_requested {
+            println!("Update: handling reset request");
+            self.reset_world(gpu)?;
+            self.controls.reset_requested = false;
+            println!("Update: reset completed");
+        }
+        
+        // Run simulation steps
+        let mut steps_run = 0;
+        while (!self.controls.paused || std::mem::take(&mut self.controls.step_once)) && self.clock.acc >= BASE_DT {
+            println!("Update: running simulation step {}", steps_run + 1);
+            self.run_simulation_step(gpu)?;
+            self.clock.acc -= BASE_DT;
+            steps_run += 1;
+        }
+        println!("Update: completed {} simulation steps", steps_run);
+        
+        Ok(())
+    }
+    
+    /// Run a single simulation step
+    fn run_simulation_step(&mut self, gpu: &GpuContext) -> Result<()> {
+        println!("Step: starting simulation step {}", self.current_step + 1);
+        
         // Update uniform buffers every frame
+        println!("Step: updating uniform buffers");
         let rd_params = RDParams::from(&self.sim_config);
         let agent_params = AgentParams::from(&self.sim_config);
         
         gpu.queue.write_buffer(&self.rd_params_buffer, 0, bytemuck::cast_slice(&[rd_params]));
         gpu.queue.write_buffer(&self.agent_params_buffer, 0, bytemuck::cast_slice(&[agent_params]));
+        println!("Step: uniform buffers updated");
         
         // Run agent pass
+        println!("Step: running agent pass");
         self.run_agent_pass(gpu)?;
+        println!("Step: agent pass completed");
         
         // Run RD pass
+        println!("Step: running RD pass");
         self.run_rd_pass(gpu)?;
+        println!("Step: RD pass completed");
         
         // Clear occupancy buffer
+        println!("Step: clearing occupancy buffer");
         self.clear_occupancy_buffer(gpu)?;
+        println!("Step: occupancy buffer cleared");
         
         // Swap ping-pong buffers (this updates the centralized state)
+        println!("Step: swapping ping-pong buffers");
         self.field_textures.swap();
+        println!("Step: ping-pong buffers swapped");
         
         // Debug: log the swap
         if self.current_step % 10 == 0 {
@@ -231,13 +323,43 @@ impl Viewer {
         }
         
         self.current_step += 1;
+        println!("Step: simulation step {} completed", self.current_step);
+        Ok(())
+    }
+    
+    /// Reset the world to initial state
+    pub fn reset_world(&mut self, gpu: &GpuContext) -> Result<()> {
+        // Reset simulation state
+        self.current_step = 0;
+        self.clock.acc = 0.0;
+        
+        // Re-seed the field
+        self.field_manager.seed_resources(self.sim_config.world.seed);
+        
+        // Re-seed agents
+        self.agent_manager = AgentManager::new(
+            self.sim_config.agents.herbivores,
+            [self.sim_config.world.size[0] as f32, self.sim_config.world.size[1] as f32],
+            self.sim_config.agents.E0,
+            self.sim_config.world.seed,
+        );
+        
+        // Upload initial data
+        self.field_textures.upload_field_data(&gpu.queue, &self.field_manager);
+        
+        // Update agent buffer
+        gpu.queue.write_buffer(&self.agents_buffer, 0, bytemuck::cast_slice(&self.agent_manager.agents));
+        
+        println!("World reset to initial state");
         Ok(())
     }
     
     /// Render the current frame
     pub fn render(&mut self, gpu: &GpuContext, renderer: &Renderer) -> Result<()> {
+        println!("Render: starting frame render");
         let output = gpu.surface.get_current_texture()?;
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        println!("Render: got surface texture and view");
         
         // Debug: Check surface dimensions
         if self.frame_count % 60 == 0 {  // Every second at 60 FPS
@@ -249,11 +371,13 @@ impl Viewer {
                 output.texture.size().height);
         }
         
+        println!("Render: creating command encoder");
         let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("render_encoder"),
         });
         
         // Create SimParams buffer for this frame
+        println!("Render: creating sim params buffer");
         let sim_params = [
             self.sim_config.world.size[0] as f32,  // world_size.x
             self.sim_config.world.size[1] as f32,  // world_size.y
@@ -271,6 +395,7 @@ impl Viewer {
         });
         
         // Render the field background and particles
+        println!("Render: calling renderer.render");
         renderer.render(
             &gpu.device, 
             &mut encoder, 
@@ -283,9 +408,15 @@ impl Viewer {
             self.field_textures.front_sample_view(),
             &self.field_sampler,
         )?;
+        println!("Render: renderer.render completed");
         
+        println!("Render: submitting command buffer");
         gpu.queue.submit(Some(encoder.finish()));
+        println!("Render: command buffer submitted");
+        
+        println!("Render: presenting output");
         output.present();
+        println!("Render: output presented");
         
         self.frame_count += 1;
         
@@ -293,10 +424,14 @@ impl Viewer {
         if self.frame_count % 30 == 0 {
             let (alive_agents, mean_r, mean_gradient, foraging_efficiency) = self.get_stats();
             println!("=== HUD (Step {}) ===", self.current_step);
-            println!("Alive agents: {}", alive_agents);
+            println!("Status: {} | Speed: {:.2}x | Agents: {}", 
+                if self.controls.paused { "PAUSED" } else { "Running" },
+                self.controls.speed,
+                alive_agents);
             println!("Mean R: {:.3}", mean_r);
             println!("Mean |∇R|: {:.3}", mean_gradient);
             println!("Foraging efficiency: {:.3}", foraging_efficiency);
+            println!("Emissions: {}", if self.controls.emissions_enabled { "ON" } else { "OFF" });
             println!("Overlays: R={}, W={}, Occ={}, ∇={}", 
                 self.show_r_field, self.show_w_field, self.show_occupancy, self.show_gradients);
             if let Some(scenario) = &self.scenario_mode {
@@ -305,6 +440,7 @@ impl Viewer {
             println!("==================");
         }
         
+        println!("Render: frame {} completed", self.frame_count);
         Ok(())
     }
     
@@ -451,6 +587,40 @@ impl Viewer {
     /// Handle key press for overlay toggles and scenario modes
     pub fn handle_key(&mut self, key: &winit::keyboard::Key) -> Result<()> {
         match key {
+            // Simulation controls
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Space) => {
+                self.controls.paused = !self.controls.paused;
+                println!("Simulation {}paused", if self.controls.paused { "" } else { "un" });
+            }
+            winit::keyboard::Key::Character(ch) if ch == "r" || ch == "R" => {
+                println!("Reset requested - will reset on next frame");
+                self.controls.reset_requested = true;
+            }
+            winit::keyboard::Key::Character(ch) if ch == "s" || ch == "S" => {
+                self.controls.step_once = true;
+                println!("Single step requested");
+            }
+            winit::keyboard::Key::Character(ch) if ch == "[" => {
+                self.controls.speed = (self.controls.speed / 1.5).max(0.0625);
+                println!("Speed: {:.2}x", self.controls.speed);
+            }
+            winit::keyboard::Key::Character(ch) if ch == "]" => {
+                self.controls.speed = (self.controls.speed * 1.5).min(64.0);
+                println!("Speed: {:.2}x", self.controls.speed);
+            }
+            winit::keyboard::Key::Character(ch) if ch == "0" => {
+                self.controls.speed = 1.0;
+                println!("Speed reset to 1.0x");
+            }
+            winit::keyboard::Key::Character(ch) if ch == "e" || ch == "E" => {
+                self.controls.emissions_enabled = !self.controls.emissions_enabled;
+                println!("Emissions {}", if self.controls.emissions_enabled { "enabled" } else { "disabled" });
+            }
+            winit::keyboard::Key::Character(ch) if ch == "h" || ch == "H" => {
+                self.print_help();
+            }
+            
+            // Overlay toggles
             winit::keyboard::Key::Character(c) if c == "1" => {
                 self.show_r_field = !self.show_r_field;
                 self.show_w_field = false;
@@ -479,6 +649,8 @@ impl Viewer {
                 self.show_gradients = !self.show_gradients;
                 log::info!("Gradient overlay: {}", self.show_gradients);
             }
+            
+            // Scenario modes
             winit::keyboard::Key::Named(winit::keyboard::NamedKey::F1) => {
                 self.scenario_mode = Some("baseline".to_string());
                 log::info!("Scenario: Baseline (all systems enabled)");
@@ -508,6 +680,19 @@ impl Viewer {
         let foraging_efficiency = 0.8; // Placeholder
         
         (alive_agents, mean_r, mean_gradient, foraging_efficiency)
+    }
+
+    /// Print available controls to the console
+    fn print_help(&self) {
+        println!("=== Available Controls ===");
+        println!("Simulation: Space - Pause/Play");
+        println!("Speed: [ - slower, ] - faster, 0 - reset");
+        println!("Reset: r");
+        println!("Single Step: s");
+        println!("Emissions: e");
+        println!("Overlays: 1 - R field, 2 - W field, 3 - Occupancy, g - Gradients");
+        println!("Scenario: F1 - Baseline, F2 - Clumpy, F3 - Flat");
+        println!("========================");
     }
 }
 
@@ -588,15 +773,18 @@ pub async fn run_viewer(sim_config: SimulationConfig) -> Result<()> {
     let renderer = Renderer::new(&gpu.device, &gpu.config, &viewer.layouts)?;
     println!("Viewer created successfully!");
     
+    // Print controls help
+    viewer.print_help();
+    
     // Request initial redraw to start the simulation
     window.request_redraw();
     
     println!("Starting event loop...");
     
-    // Create a simple timer to ensure simulation runs
-    let mut last_update = std::time::Instant::now();
+    // Use a simpler approach that ensures simulation runs
+    let mut last_update = Instant::now();
     let target_fps = 60.0;
-    let frame_duration = std::time::Duration::from_secs_f32(1.0 / target_fps);
+    let frame_duration = Duration::from_secs_f64(1.0 / target_fps);
     
     event_loop.run(move |event, elwt| {
         match event {
@@ -604,12 +792,14 @@ pub async fn run_viewer(sim_config: SimulationConfig) -> Result<()> {
                 ref event,
                 window_id,
             } if window_id == viewer.window.id() => {
+                println!("Window event: {:?}", event);
                 match event {
                     WindowEvent::CloseRequested => {
                         println!("Window close requested");
                         elwt.exit();
                     }
                     WindowEvent::Resized(physical_size) => {
+                        println!("Window resized to {:?}", physical_size);
                         viewer.resize(&mut gpu, *physical_size);
                         // Request a redraw after resize
                         viewer.window.request_redraw();
@@ -633,6 +823,7 @@ pub async fn run_viewer(sim_config: SimulationConfig) -> Result<()> {
                         },
                         ..
                     } => {
+                        println!("Key pressed: {:?}", logical_key);
                         if let Err(e) = viewer.handle_key(logical_key) {
                             log::error!("Key handling error: {}", e);
                         }
@@ -640,48 +831,42 @@ pub async fn run_viewer(sim_config: SimulationConfig) -> Result<()> {
                     _ => {}
                 }
             }
-            Event::DeviceEvent {
-                event: winit::event::DeviceEvent::MouseWheel { delta: _, .. },
-                ..
-            } => {
-                // Handle mouse wheel for zoom
-            }
-            Event::AboutToWait => {
-                // Check if it's time for the next frame
-                let now = std::time::Instant::now();
-                if now.duration_since(last_update) >= frame_duration {
-                    last_update = now;
-                    
-                    // Directly update and render instead of requesting redraw
-                    if let Err(e) = viewer.update(&gpu) {
-                        log::error!("Simulation update error: {}", e);
-                    }
-                    
-                    if let Err(e) = viewer.render(&gpu, &renderer) {
-                        log::error!("Render error: {}", e);
-                    }
-                }
-            }
             Event::WindowEvent {
                 event: WindowEvent::RedrawRequested,
                 ..
             } => {
+                println!("Redraw requested - starting update");
                 // Update simulation
                 if let Err(e) = viewer.update(&gpu) {
                     log::error!("Simulation update error: {}", e);
+                    println!("Simulation update failed: {}", e);
+                } else {
+                    println!("Simulation update completed");
                 }
                 
+                println!("Starting render");
                 // Render frame
                 if let Err(e) = viewer.render(&gpu, &renderer) {
                     log::error!("Render error: {}", e);
+                    println!("Render failed: {}", e);
+                } else {
+                    println!("Render completed");
                 }
                 
-                // Request next redraw to keep the loop going
-                viewer.window.request_redraw();
+                // Schedule next frame
+                let now = Instant::now();
+                if now.duration_since(last_update) >= frame_duration {
+                    last_update = now;
+                    println!("Scheduling next frame");
+                    viewer.window.request_redraw();
+                }
             }
-            _ => {}
+            _ => {
+                println!("Other event: {:?}", event);
+            }
         }
     })?;
     
     Ok(())
 }
+

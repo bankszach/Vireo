@@ -23,7 +23,8 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
 
   out.pos = vec4<f32>(ndc, 0.0, 1.0);
   // UVs that match the screen (flip Y to taste)
-  out.uv  = vec2<f32>(p.x, 1.0 - p.y);
+  // ✅ UV must be in [0,1] - halve the p values
+  out.uv  = vec2<f32>(p.x * 0.5, 1.0 - p.y * 0.5);
   return out;
 }
 
