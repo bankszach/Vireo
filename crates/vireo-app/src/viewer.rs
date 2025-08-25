@@ -126,7 +126,17 @@ impl Viewer {
             &layouts,
             &rd_params_buffer,
             &occupancy_buffer,
-            &gpu.device.create_sampler(&wgpu::SamplerDescriptor::default()), // Will get proper sampler from renderer
+            &gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("field_sampler"),
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::FilterMode::Nearest,
+                compare: None,
+                ..Default::default()
+            }),
         );
         
         // Upload initial data
@@ -168,7 +178,17 @@ impl Viewer {
                 &self.layouts,
                 &self.rd_params_buffer,
                 &self.occupancy_buffer,
-                &gpu.device.create_sampler(&wgpu::SamplerDescriptor::default()),
+                &gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+                    label: Some("field_sampler"),
+                    address_mode_u: wgpu::AddressMode::ClampToEdge,
+                    address_mode_v: wgpu::AddressMode::ClampToEdge,
+                    address_mode_w: wgpu::AddressMode::ClampToEdge,
+                    mag_filter: wgpu::FilterMode::Linear,
+                    min_filter: wgpu::FilterMode::Linear,
+                    mipmap_filter: wgpu::FilterMode::Nearest,
+                    compare: None,
+                    ..Default::default()
+                }),
             );
         }
     }

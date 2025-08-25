@@ -110,6 +110,11 @@ impl Renderer {
         view: &TextureView,
         field_textures: &FieldPingPong,
     ) -> Result<()> {
+        // Debug: log render call
+        println!("Renderer: Starting field render pass");
+        println!("Renderer: Field size: {:?}", field_textures.size());
+        println!("Renderer: Front is A: {}", field_textures.front_is_a());
+        
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("field_render_pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -133,12 +138,16 @@ impl Renderer {
         render_pass.set_pipeline(&self.render_pipeline);
         
         // Use the centralized render bind group from FieldPingPong
-        render_pass.set_bind_group(0, field_textures.render_bind_group(), &[]);
+        // This bind group contains the field texture and sampler
+        let bind_group = field_textures.render_bind_group();
+        println!("Renderer: Using bind group for front texture");
+        render_pass.set_bind_group(0, bind_group, &[]);
         
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
 
+        println!("Renderer: Field render pass completed");
         Ok(())
     }
 }

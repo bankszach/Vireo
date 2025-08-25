@@ -71,8 +71,26 @@ impl FieldPingPong {
             view_formats: &[],
         });
         
-        let view_a_sample = tex_a.create_view(&TextureViewDescriptor::default());
-        let view_b_sample = tex_b.create_view(&TextureViewDescriptor::default());
+        let view_a_sample = tex_a.create_view(&TextureViewDescriptor {
+            label: Some("field_a_sample"),
+            format: Some(format),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            aspect: wgpu::TextureAspect::All,
+            base_mip_level: 0,
+            mip_level_count: Some(1),
+            base_array_layer: 0,
+            array_layer_count: Some(1),
+        });
+        let view_b_sample = tex_b.create_view(&TextureViewDescriptor {
+            label: Some("field_b_sample"),
+            format: Some(format),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            aspect: wgpu::TextureAspect::All,
+            base_mip_level: 0,
+            mip_level_count: Some(1),
+            base_array_layer: 0,
+            array_layer_count: Some(1),
+        });
         
         let view_a_store = tex_a.create_view(&TextureViewDescriptor {
             label: Some("field_a_store"),
@@ -247,8 +265,26 @@ impl FieldPingPong {
         });
         
         // Recreate views
-        self.view_a_sample = self.tex_a.create_view(&TextureViewDescriptor::default());
-        self.view_b_sample = self.tex_b.create_view(&TextureViewDescriptor::default());
+        self.view_a_sample = self.tex_a.create_view(&TextureViewDescriptor {
+            label: Some("field_a_sample"),
+            format: Some(format),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            aspect: wgpu::TextureAspect::All,
+            base_mip_level: 0,
+            mip_level_count: Some(1),
+            base_array_layer: 0,
+            array_layer_count: Some(1),
+        });
+        self.view_b_sample = self.tex_b.create_view(&TextureViewDescriptor {
+            label: Some("field_b_sample"),
+            format: Some(format),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            aspect: wgpu::TextureAspect::All,
+            base_mip_level: 0,
+            mip_level_count: Some(1),
+            base_array_layer: 0,
+            array_layer_count: Some(1),
+        });
         
         self.view_a_store = self.tex_a.create_view(&TextureViewDescriptor {
             label: Some("field_a_store"),
@@ -359,7 +395,10 @@ impl FieldPingPong {
     /// Get the render bind group for the current frame (show front texture)
     #[inline] 
     pub fn render_bind_group(&self) -> &BindGroup {
-        if self.front_is_a { &self.show_a_bg } else { &self.show_b_bg }
+        let bind_group = if self.front_is_a { &self.show_a_bg } else { &self.show_b_bg };
+        println!("FieldPingPong: render_bind_group called, front_is_a={}, returning {} bind group", 
+            self.front_is_a, if self.front_is_a { "A" } else { "B" });
+        bind_group
     }
     
     /// Get the front texture view for sampling (reading)
@@ -399,7 +438,17 @@ impl FieldPingPong {
     
     /// Upload field data to texture A
     pub fn upload_field_data(&self, queue: &Queue, field_manager: &FieldManager) {
+        println!("FieldPingPong: Starting texture upload");
+        println!("FieldPingPong: Field size: {:?}", self.size);
+        
         let data = field_manager.to_rgba16f();
+        println!("FieldPingPong: Converted {} RGBA16F values", data.len());
+        
+        // Debug: check first few values
+        if data.len() >= 4 {
+            println!("FieldPingPong: First RGBA values: R={:.3}, W={:.3}, A3={:.3}, A4={:.3}", 
+                data[0].to_f32(), data[1].to_f32(), data[2].to_f32(), data[3].to_f32());
+        }
         
         // Convert f16 to bytes manually since bytemuck doesn't support half::f16
         let mut bytes = Vec::with_capacity(data.len() * 2);
@@ -421,6 +470,8 @@ impl FieldPingPong {
             let padding = padded_bytes_per_row - bytes_per_row;
             padded_bytes.extend(std::iter::repeat(0u8).take(padding as usize));
         }
+        
+        println!("FieldPingPong: Uploading {} bytes to texture", padded_bytes.len());
         
         let layout = wgpu::ImageDataLayout {
             offset: 0,
@@ -445,6 +496,8 @@ impl FieldPingPong {
             layout,
             size,
         );
+        
+        println!("FieldPingPong: Texture upload completed");
     }
     
     /// Download field data from the front texture
