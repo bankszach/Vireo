@@ -25,6 +25,8 @@ pub struct FieldPingPong {
     
     // grid size
     size: [u32; 2],
+    
+
 }
 
 impl FieldPingPong {
@@ -217,6 +219,7 @@ impl FieldPingPong {
             show_b_bg,
             front_is_a: true,
             size,
+
         }
     }
 
@@ -384,6 +387,8 @@ impl FieldPingPong {
                 },
             ],
         });
+        
+
     }
 
     /// Get the RD bind group for the current frame (read from front, write to back)
@@ -435,6 +440,8 @@ impl FieldPingPong {
     pub fn size(&self) -> [u32; 2] {
         self.size
     }
+    
+
     
     /// Upload field data to texture A
     pub fn upload_field_data(&self, queue: &Queue, field_manager: &FieldManager) {

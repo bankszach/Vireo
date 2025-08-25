@@ -49,6 +49,9 @@ pub struct Viewer {
     agents_buffer: wgpu::Buffer,
     occupancy_buffer: wgpu::Buffer,
     
+    // Field sampler for rendering
+    field_sampler: wgpu::Sampler,
+    
     // Simulation parameters
     sim_config: SimulationConfig,
     current_step: u32,
@@ -120,6 +123,19 @@ impl Viewer {
             mapped_at_creation: false,
         });
         
+        // Create field sampler
+        let field_sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("field_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            compare: None,
+            ..Default::default()
+        });
+        
         // Create FieldPingPong with centralized layouts
         let field_textures = FieldPingPong::new(
             &gpu.device,
@@ -127,17 +143,7 @@ impl Viewer {
             &layouts,
             &rd_params_buffer,
             &occupancy_buffer,
-            &gpu.device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("field_sampler"),
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                address_mode_w: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::FilterMode::Nearest,
-                compare: None,
-                ..Default::default()
-            }),
+            &field_sampler,
         );
         
         // Upload initial data
@@ -154,6 +160,7 @@ impl Viewer {
             agent_params_buffer,
             agents_buffer,
             occupancy_buffer,
+            field_sampler,
             sim_config,
             current_step: 0,
             last_frame_time: Instant::now(),
@@ -173,23 +180,26 @@ impl Viewer {
             gpu.config.height = new_size.height;
             gpu.surface.configure(&gpu.device, &gpu.config);
             
+            // Recreate field sampler
+            self.field_sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("field_sampler"),
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::FilterMode::Nearest,
+                compare: None,
+                ..Default::default()
+            });
+            
             // Recreate field textures and bind groups using centralized layouts
             self.field_textures.recreate(
                 &gpu.device,
                 &self.layouts,
                 &self.rd_params_buffer,
                 &self.occupancy_buffer,
-                &gpu.device.create_sampler(&wgpu::SamplerDescriptor {
-                    label: Some("field_sampler"),
-                    address_mode_u: wgpu::AddressMode::ClampToEdge,
-                    address_mode_v: wgpu::AddressMode::ClampToEdge,
-                    address_mode_w: wgpu::AddressMode::ClampToEdge,
-                    mag_filter: wgpu::FilterMode::Linear,
-                    min_filter: wgpu::FilterMode::Linear,
-                    mipmap_filter: wgpu::FilterMode::Nearest,
-                    compare: None,
-                    ..Default::default()
-                }),
+                &self.field_sampler,
             );
         }
     }
@@ -260,8 +270,19 @@ impl Viewer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         
-        // Render the particles
-        renderer.render(&gpu.device, &mut encoder, &view, &sim_params_buffer, &self.agents_buffer, self.sim_config.agents.herbivores, &self.layouts.particle_render)?;
+        // Render the field background and particles
+        renderer.render(
+            &gpu.device, 
+            &mut encoder, 
+            &view, 
+            &sim_params_buffer, 
+            &self.agents_buffer, 
+            self.sim_config.agents.herbivores, 
+            &self.layouts.particle_render,
+            &self.layouts.field_render,
+            self.field_textures.front_sample_view(),
+            &self.field_sampler,
+        )?;
         
         gpu.queue.submit(Some(encoder.finish()));
         output.present();
