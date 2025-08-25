@@ -423,11 +423,40 @@ impl Viewer {
         // Display HUD info every 30 frames (about once per second at 60 FPS)
         if self.frame_count % 30 == 0 {
             let (alive_agents, mean_r, mean_gradient, foraging_efficiency) = self.get_stats();
+            
+            // Count agents by type
+            let mut plant_count = 0;
+            let mut herbivore_count = 0;
+            let mut predator_count = 0;
+            
+            for agent in &self.agent_manager.agents {
+                if agent.alive == 1 {
+                    match agent.kind {
+                        0 => plant_count += 1,
+                        1 => herbivore_count += 1,
+                        2 => predator_count += 1,
+                        _ => {}
+                    }
+                }
+            }
+            
+            // Debug: Show first few particles' data
             println!("=== HUD (Step {}) ===", self.current_step);
-            println!("Status: {} | Speed: {:.2}x | Agents: {}", 
+            println!("Status: {} | Speed: {:.2}x | Total Agents: {}", 
                 if self.controls.paused { "PAUSED" } else { "Running" },
                 self.controls.speed,
                 alive_agents);
+            println!("Agent Types: Plants={}, Herbivores={}, Predators={}", 
+                plant_count, herbivore_count, predator_count);
+            
+            // Debug: Show first 5 particles' kind values
+            println!("First 5 particles: ");
+            for i in 0..5.min(self.agent_manager.agents.len()) {
+                let agent = &self.agent_manager.agents[i];
+                println!("  Particle {}: pos=({:.1}, {:.1}), kind={}, alive={}", 
+                    i, agent.pos[0], agent.pos[1], agent.kind, agent.alive);
+            }
+            
             println!("Mean R: {:.3}", mean_r);
             println!("Mean |∇R|: {:.3}", mean_gradient);
             println!("Foraging efficiency: {:.3}", foraging_efficiency);

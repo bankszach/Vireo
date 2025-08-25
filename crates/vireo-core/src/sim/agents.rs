@@ -11,15 +11,17 @@ pub struct Agent {
     pub vel: [f32; 2],     // Velocity (vx, vy)
     pub energy: f32,        // Current energy
     pub alive: u32,         // Alive flag (1 = alive, 0 = dead)
+    pub kind: u32,          // Agent type: 0 = plant, 1 = herbivore, 2 = predator
 }
 
 impl Agent {
-    pub fn new(pos: Vec2, energy: f32) -> Self {
+    pub fn new(pos: Vec2, energy: f32, kind: u32) -> Self {
         Self {
             pos: [pos.x, pos.y],
             vel: [0.0, 0.0],
             energy,
             alive: 1,
+            kind,
         }
     }
 
@@ -72,9 +74,26 @@ impl AgentManager {
     pub fn new(herbivore_count: u32, world_size: [f32; 2], initial_energy: f32, seed: u64) -> Self {
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(seed);
         
-        let mut agents = Vec::with_capacity(herbivore_count as usize);
+        // Calculate target counts for each type
+        let total_agents = herbivore_count * 3; // Total agents including plants and predators
+        let plant_count = total_agents / 6; // ~16.7% plants
+        let predator_count = total_agents / 6; // ~16.7% predators
+        let actual_herbivore_count = total_agents - plant_count - predator_count; // ~66.6% herbivores
         
-        for _ in 0..herbivore_count {
+        let mut agents = Vec::with_capacity(total_agents as usize);
+        
+        // Spawn plants first - distribute them evenly across the world
+        for i in 0..plant_count {
+            let x = rng.gen_range(20.0..(world_size[0] - 20.0));
+            let y = rng.gen_range(20.0..(world_size[1] - 20.0));
+            let pos = Vec2::new(x, y);
+            
+            let agent = Agent::new(pos, initial_energy * 1.5, 0); // Plants have more energy, kind 0
+            agents.push(agent);
+        }
+        
+        // Spawn herbivores - distribute them more randomly
+        for i in 0..actual_herbivore_count {
             let x = rng.gen_range(10.0..(world_size[0] - 10.0));
             let y = rng.gen_range(10.0..(world_size[1] - 10.0));
             let pos = Vec2::new(x, y);
@@ -84,7 +103,23 @@ impl AgentManager {
             let speed = rng.gen_range(0.1..0.5);
             let vel = Vec2::new(angle.cos() * speed, angle.sin() * speed);
             
-            let mut agent = Agent::new(pos, initial_energy);
+            let mut agent = Agent::new(pos, initial_energy, 1); // Herbivore kind 1
+            agent.vel = [vel.x, vel.y];
+            agents.push(agent);
+        }
+        
+        // Spawn predators - place them strategically
+        for i in 0..predator_count {
+            let x = rng.gen_range(30.0..(world_size[0] - 30.0));
+            let y = rng.gen_range(30.0..(world_size[1] - 30.0));
+            let pos = Vec2::new(x, y);
+            
+            // Add some initial random velocity
+            let angle = rng.gen_range(0.0..std::f32::consts::TAU);
+            let speed = rng.gen_range(0.2..0.8);
+            let vel = Vec2::new(angle.cos() * speed, angle.sin() * speed);
+            
+            let mut agent = Agent::new(pos, initial_energy * 1.2, 2); // Predator kind 2, more energy
             agent.vel = [vel.x, vel.y];
             agents.push(agent);
         }
