@@ -10,20 +10,20 @@ struct VSOut {
 
 @vertex
 fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
-  // Fullscreen triangle using vertex index to generate positions
   var out: VSOut;
-  
-  // Convert vertex index to position using bit manipulation
-  let x = f32(vid & 1u) * 4.0 - 1.0;
-  let y = f32((vid & 2u) >> 1u) * 4.0 - 1.0;
-  
-  out.pos = vec4<f32>(x, y, 0.0, 1.0);
-  
-  // Generate UV coordinates that cover the full screen
-  let u = f32(vid & 1u) * 2.0;
-  let v = f32((vid & 2u) >> 1u) * 2.0;
-  out.uv = vec2<f32>(u, v);
-  
+
+  // p = (0,0), (2,0), (0,2) for vid=0,1,2
+  let p = vec2<f32>(
+    f32((vid << 1u) & 2u),
+    f32( vid        & 2u)
+  );
+
+  // NDC: (-1,-1), (3,-1), (-1,3)
+  let ndc = p * 2.0 - 1.0;
+
+  out.pos = vec4<f32>(ndc, 0.0, 1.0);
+  // UVs that match the screen (flip Y to taste)
+  out.uv  = vec2<f32>(p.x, 1.0 - p.y);
   return out;
 }
 
