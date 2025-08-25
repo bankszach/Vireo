@@ -781,12 +781,15 @@ pub async fn run_viewer(sim_config: SimulationConfig) -> Result<()> {
     
     println!("Starting event loop...");
     
-    // Use a simpler approach that ensures simulation runs
+    // Use a simple timer-based approach with ControlFlow::Poll
     let mut last_update = Instant::now();
     let target_fps = 60.0;
     let frame = Duration::from_secs_f64(1.0 / target_fps);
     
     event_loop.run(move |event, elwt| {
+        // Set control flow to Poll for continuous updates
+        elwt.set_control_flow(winit::event_loop::ControlFlow::Poll);
+        
         match event {
             // Handle window input etc.
             Event::WindowEvent { window_id, event } if window_id == viewer.window.id() => {
@@ -827,48 +830,42 @@ pub async fn run_viewer(sim_config: SimulationConfig) -> Result<()> {
                 }
             }
             
-            // Handle redraw requests - this should work for continuous rendering
+            // Handle redraw requests
             Event::WindowEvent {
                 event: WindowEvent::RedrawRequested,
                 ..
             } => {
-                println!("RedrawRequested - starting update");
-                
-                // Fixed timestep update
-                let now = Instant::now();
-                let real_dt = (now - last_update).as_secs_f32();
-                last_update = now;
-                
-                // Update simulation
-                if let Err(e) = viewer.update(&gpu) {
-                    log::error!("Simulation update error: {}", e);
-                    println!("Simulation update failed: {}", e);
-                } else {
-                    println!("Simulation update completed");
-                }
-                
-                println!("Starting render");
-                // Render frame
-                if let Err(e) = viewer.render(&gpu, &renderer) {
-                    log::error!("Render error: {}", e);
-                    println!("Render failed: {}", e);
-                } else {
-                    println!("Render completed");
-                }
-                
-                // Schedule next frame
-                let now = Instant::now();
-                if now.duration_since(last_update) >= frame {
-                    last_update = now;
-                    println!("Scheduling next frame");
-                    viewer.window.request_redraw();
-                }
+                // This will be called when the window actually needs to redraw
+                println!("RedrawRequested received");
             }
             
-            // Schedule next frame at ~60Hz and request a redraw
-            Event::AboutToWait => {
-                elwt.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(Instant::now() + frame));
-                viewer.window.request_redraw();
+            // Check if it's time for the next frame
+            Event::NewEvents(_) => {
+                let now = Instant::now();
+                if now.duration_since(last_update) >= frame {
+                    println!("NewEvents - starting update");
+                    last_update = now;
+                    
+                    // Update simulation
+                    if let Err(e) = viewer.update(&gpu) {
+                        log::error!("Simulation update error: {}", e);
+                        println!("Simulation update failed: {}", e);
+                    } else {
+                        println!("Simulation update completed");
+                    }
+                    
+                    println!("Starting render");
+                    // Render frame
+                    if let Err(e) = viewer.render(&gpu, &renderer) {
+                        log::error!("Render error: {}", e);
+                        println!("Render failed: {}", e);
+                    } else {
+                        println!("Render completed");
+                    }
+                    
+                    // Request next redraw
+                    viewer.window.request_redraw();
+                }
             }
             
             _ => {
